@@ -18,6 +18,7 @@ from typing import Callable, Optional
 
 OS_MANIFEST_URL = "https://downloads.raspberrypi.com/os_list_imagingutility_v4.json"
 OFFICIAL_LINUX_DEB_URL = "https://downloads.raspberrypi.com/imager/imager_latest_amd64.deb"
+RPI_IMAGER_RELEASES_API = "https://api.github.com/repos/raspberrypi/rpi-imager/releases/latest"
 WINGET_PACKAGE_ID = "RaspberryPiFoundation.RaspberryPiImager"
 
 
@@ -181,6 +182,7 @@ def find_imager() -> Optional[str]:
             if root:
                 for relative in (
                     Path("Raspberry Pi Imager") / "rpi-imager.exe",
+                    Path("Raspberry Pi Ltd") / "Imager" / "rpi-imager.exe",
                     Path("Programs") / "Raspberry Pi Imager" / "rpi-imager.exe",
                 ):
                     candidate = Path(root) / relative
@@ -211,27 +213,97 @@ def ensure_imager(progress: Optional[Callable[[str], None]] = None) -> str:
     if system == "windows":
         if not is_elevated():
             raise ImagerError("Abra a CLI em um terminal como Administrador para instalar o Raspberry Pi Imager.")
-        winget = shutil.which("winget")
-        if not winget:
-            raise ImagerError("Raspberry Pi Imager não encontrado e o winget não está disponível neste Windows.")
-        command = [winget, "install", "--exact", "--id", WINGET_PACKAGE_ID,
-                   "--silent", "--accept-package-agreements", "--accept-source-agreements"]
+        _install_windows_imager(progress)
     elif system == "linux" and shutil.which("apt-get"):
         command = ["apt-get", "update"]
         if progress:
             progress("Atualizando índice de pacotes para instalar Raspberry Pi Imager...")
         _run_install(command)
         command = ["apt-get", "install", "-y", "rpi-imager"]
+        if progress:
+            progress("Instalando Raspberry Pi Imager...")
+        _run_install(command)
     else:
         raise ImagerError("Instalação automática disponível apenas via apt no Debian/Ubuntu ou winget no Windows.")
-    if progress:
-        progress("Instalando Raspberry Pi Imager...")
-    _run_install(command)
     executable = find_imager()
     if not executable:
         raise ImagerError("A instalação terminou, mas o executável rpi-imager não foi localizado.")
     _require_first_run_support(executable)
     return executable
+
+
+def _install_windows_imager(progress: Optional[Callable[[str], None]] = None) -> None:
+    """Install on Windows via winget, falling back to the official installer.
+
+    Corporate machines often block the winget/msstore source ("Failed when
+    searching source"), so a winget failure downloads the official Inno Setup
+    installer from the rpi-imager GitHub release and installs it silently.
+    """
+    winget = shutil.which("winget")
+    if winget:
+        try:
+            if progress:
+                progress("Instalando Raspberry Pi Imager via winget...")
+            _run_install([winget, "install", "--exact", "--id", WINGET_PACKAGE_ID,
+                          "--silent", "--accept-package-agreements", "--accept-source-agreements"])
+            return
+        except ImagerError as exc:
+            if progress:
+                progress(f"O winget falhou ({exc}); tentando o instalador oficial...")
+    _install_official_windows_imager(progress)
+
+
+def _install_official_windows_imager(progress: Optional[Callable[[str], None]] = None) -> None:
+    """Download the official rpi-imager Inno Setup installer and run it silently."""
+    try:
+        data = _fetch_json(RPI_IMAGER_RELEASES_API)
+    except ImagerError as exc:
+        raise ImagerError(
+            "Não foi possível consultar as releases oficiais do Raspberry Pi Imager. "
+            "Instale manualmente pelo site https://www.raspberrypi.com/software/ e tente de novo."
+        ) from exc
+    assets = data.get("assets", []) if isinstance(data, dict) else []
+    installer_asset = next((
+        asset for asset in assets
+        if isinstance(asset, dict)
+        and str(asset.get("name", "")).lower().endswith(".exe")
+        and asset.get("browser_download_url")
+    ), None)
+    if installer_asset is None:
+        raise ImagerError(
+            "A release oficial não traz instalador Windows (.exe). "
+            "Instale manualmente pelo site https://www.raspberrypi.com/software/ e tente de novo."
+        )
+    with tempfile.TemporaryDirectory(prefix="totem-imager-") as temp_dir:
+        setup_path = Path(temp_dir) / "rpi-imager-setup.exe"
+        request = urllib.request.Request(
+            str(installer_asset["browser_download_url"]),
+            headers={"User-Agent": "TotemSetup/0.1"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response, setup_path.open("wb") as setup:
+                shutil.copyfileobj(response, setup)
+        except Exception as exc:
+            raise ImagerError(f"Não foi possível baixar o instalador oficial: {exc}") from exc
+        if setup_path.stat().st_size < 1_000_000:
+            raise ImagerError("O instalador baixado está incompleto; a gravação não foi iniciada.")
+        if progress:
+            progress("Executando o instalador oficial em modo silencioso...")
+        try:
+            completed = subprocess.run(
+                [str(setup_path), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
+                text=True,
+                capture_output=True,
+                timeout=600,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ImagerError(
+                "O instalador oficial demorou demais para concluir. "
+                "Conclua a instalação manualmente e tente de novo."
+            ) from exc
+        if completed.returncode != 0:
+            details = (completed.stderr or completed.stdout).strip()
+            raise ImagerError(f"Falha instalando o Raspberry Pi Imager: {details[-1200:]}")
 
 
 def _install_official_linux_imager() -> None:

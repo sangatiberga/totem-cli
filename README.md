@@ -79,7 +79,7 @@ O fluxo de gravação usa o modo CLI oficial do Raspberry Pi Imager, consulta o 
 ## Estado e limitações
 
 - O primeiro boot cria o usuário e hostname, configura Wi-Fi por NetworkManager, instala X11/LightDM/Openbox/Chromium e aplica o autostart do Totem.
-- No Linux, a CLI solicita a senha sudo antes de instalar/usar o Imager para gravação. Se a versão do repositório Ubuntu for antiga, baixa e instala o pacote `.deb` oficial atual. No Windows, abra o terminal como Administrador; se necessário, a CLI tenta instalar o Imager via winget.
+- No Linux, a CLI solicita a senha sudo antes de instalar/usar o Imager para gravação. Se a versão do repositório Ubuntu for antiga, baixa e instala o pacote `.deb` oficial atual. No Windows, abra o terminal como Administrador; se necessário, a CLI tenta instalar o Imager via winget e, se a fonte do winget falhar (comum com a Store bloqueada), baixa o instalador oficial e o executa em modo silencioso.
 - Cartões removíveis montados pelo ambiente gráfico aparecem na seleção. O Imager controla o acesso ao destino durante a gravação; confirme modelo e capacidade no diálogo antes de prosseguir.
 - A opção **Erase** do assistente gráfico do Imager não existe no modo `--cli` oficial, que exige um arquivo/URL de imagem e um dispositivo de destino. Para apenas formatar/apagar sem gravar um OS, use o Imager gráfico.
 - A escrita e a instalação de pacotes ainda precisam ser validadas em um cartão de teste e em um Raspberry Pi 5 Bookworm antes de produção.
