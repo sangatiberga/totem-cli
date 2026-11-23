@@ -739,6 +739,7 @@ class ProgressFlashScreen(BaseScreen):
         self.target_size = target_size
         self.sudo_password = sudo_password
         self.operation_finished = False
+        self.succeeded = False
 
     def on_mount(self) -> None:
         self.set_steps(["Origem e destino", "Totem e rede", "Gravação"], 2)
@@ -907,6 +908,7 @@ class ProgressFlashScreen(BaseScreen):
                 "Pode remover o cartão e ligar o Raspberry Pi."
             )
             done_button.label = "Concluir — voltar ao início"
+            self.succeeded = True
         except Exception as exc:
             self.query_one("#flash-phase", Static).update("Não foi possível concluir")
             self.query_one("#flash-detail", Static).update(f"Falha: {exc}")
@@ -1115,9 +1117,13 @@ class TotemApp(App[None]):
             else:
                 self._start_flash(cfg)
         elif wid == "done-flash":
-            # Concluir/Voltar always returns to the two initial choices.
-            while len(self.screen_stack) > 1 and not isinstance(self.screen, HomeScreen):
-                await self.pop_screen()
+            if isinstance(self.screen, ProgressFlashScreen) and self.screen.succeeded:
+                # Only a successful flash ("Concluir") returns to the start.
+                while len(self.screen_stack) > 1 and not isinstance(self.screen, HomeScreen):
+                    await self.pop_screen()
+            else:
+                # "Voltar" after a failure just goes back one step.
+                self.pop_screen()
         elif wid == "cancel" and isinstance(self.screen, SshInventoryScreen):
             # Clear connection identity when returning from the connected Totem.
             ssh_screen = self.screen_stack[-2]

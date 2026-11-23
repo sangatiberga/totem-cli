@@ -137,6 +137,23 @@ class TestEnsureImagerWindows(unittest.TestCase):
             mock_run.assert_not_called()
             mock_urlopen.assert_not_called()
 
+    def test_windows_probe_accepts_v2_despite_empty_help(self):
+        def run(cmd, **kwargs):
+            if cmd[0] == "powershell":
+                return _completed(0, "2.0.12\n", "")
+            return _completed(0, "", "")
+        with patch("os.name", "nt"), patch("subprocess.run", side_effect=run):
+            imager._require_first_run_support("C:\\Program Files\\Raspberry Pi Ltd\\Imager\\rpi-imager.exe")
+
+    def test_windows_probe_rejects_old_version(self):
+        def run(cmd, **kwargs):
+            if cmd[0] == "powershell":
+                return _completed(0, "1.8.5\n", "")
+            return _completed(0, "", "")
+        with patch("os.name", "nt"), patch("subprocess.run", side_effect=run):
+            with self.assertRaises(imager.ImagerError):
+                imager._require_first_run_support("C:\\old\\rpi-imager.exe")
+
     def test_not_elevated_aborts_before_any_install_attempt(self):
         active = []
         self._patch_platform(active)

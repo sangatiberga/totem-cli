@@ -5,6 +5,7 @@ import ctypes
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import tempfile
@@ -361,14 +362,40 @@ def _install_official_linux_imager() -> None:
             raise ImagerError(f"Falha atualizando o Raspberry Pi Imager: {details[-1200:]}")
 
 
+def _windows_file_version(executable: str) -> Optional[tuple[int, int, int]]:
+    """Read the PE file version of a Windows executable via PowerShell."""
+    escaped = executable.replace("'", "''")
+    script = f"(Get-Item -LiteralPath '{escaped}').VersionInfo.FileVersion"
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=15,
+        )
+    except Exception:
+        return None
+    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", completed.stdout or "")
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3) or 0))
+
+
 def _require_first_run_support(executable: str) -> None:
     result = subprocess.run([executable, "--cli", "--help"], capture_output=True, text=True, timeout=15)
     help_text = (result.stdout or "") + (result.stderr or "")
-    if "--first-run-script" not in help_text:
-        raise ImagerError(
-            "A versão instalada do Raspberry Pi Imager não oferece --first-run-script. "
-            "Atualize o Imager antes de gravar; nenhum dado foi escrito."
-        )
+    if "--first-run-script" in help_text:
+        return
+    if os.name == "nt":
+        # The Windows GUI binary does not write CLI help to a captured pipe
+        # (upstream: "Standard out empty in CLI mode (Windows)"), so the help
+        # probe false-negatives there. Fall back to the file version:
+        # --first-run-script exists since Imager 1.9.
+        version = _windows_file_version(executable)
+        if version is not None and version >= (1, 9, 0):
+            return
+    raise ImagerError(
+        "A versão instalada do Raspberry Pi Imager não oferece --first-run-script. "
+        "Atualize o Imager antes de gravar; nenhum dado foi escrito."
+    )
 
 
 def _run_install(command: list[str]) -> None:
