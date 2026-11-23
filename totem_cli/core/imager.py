@@ -171,11 +171,13 @@ def is_elevated() -> bool:
     return hasattr(os, "geteuid") and os.geteuid() == 0
 
 
-def find_imager() -> Optional[str]:
+def find_all_imagers() -> list[str]:
+    """Every rpi-imager candidate on this machine, in lookup order."""
+    found: list[str] = []
     for name in ("rpi-imager", "rpi-imager.exe", "Raspberry Pi Imager.exe"):
-        found = shutil.which(name)
-        if found:
-            return found
+        path = shutil.which(name)
+        if path and path not in found:
+            found.append(path)
     if os.name == "nt":
         roots = [os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"), os.environ.get("LOCALAPPDATA")]
         for root in roots:
@@ -185,59 +187,72 @@ def find_imager() -> Optional[str]:
                     Path("Raspberry Pi Ltd") / "Imager" / "rpi-imager.exe",
                     Path("Programs") / "Raspberry Pi Imager" / "rpi-imager.exe",
                 ):
-                    candidate = Path(root) / relative
-                    if candidate.is_file():
-                        return str(candidate)
+                    candidate = str(Path(root) / relative)
+                    if candidate not in found and Path(candidate).is_file():
+                        found.append(candidate)
+    return found
+
+
+def find_imager() -> Optional[str]:
+    candidates = find_all_imagers()
+    return candidates[0] if candidates else None
+
+
+def _first_supported_imager() -> Optional[str]:
+    """First installed Imager that supports --first-run-script, if any.
+
+    An upgrade may land beside an old copy instead of replacing it, so every
+    candidate is probed instead of trusting lookup order alone.
+    """
+    for candidate in find_all_imagers():
+        try:
+            _require_first_run_support(candidate)
+            return candidate
+        except ImagerError:
+            continue
     return None
 
 
 def ensure_imager(progress: Optional[Callable[[str], None]] = None) -> str:
     """Find or install Raspberry Pi Imager using the host's native package tool."""
-    executable = find_imager()
-    if executable:
-        try:
-            _require_first_run_support(executable)
-            return executable
-        except ImagerError:
-            system = platform.system().lower()
-            if system == "windows":
-                if not is_elevated():
-                    raise ImagerError("Abra a CLI em um terminal como Administrador para atualizar o Raspberry Pi Imager.")
-                if progress:
-                    progress("A versão do Imager é antiga; atualizando pelo instalador oficial...")
-                _install_official_windows_imager(progress)
-            elif system == "linux" and shutil.which("apt-get"):
-                if progress:
-                    progress("A versão do Imager é antiga; baixando a versão oficial atualizada...")
-                _install_official_linux_imager()
-            else:
-                raise
-            executable = find_imager()
-            if not executable:
-                raise ImagerError("A atualização terminou, mas rpi-imager não foi localizado.")
-            _require_first_run_support(executable)
-            return executable
+    supported = _first_supported_imager()
+    if supported:
+        return supported
     system = platform.system().lower()
+    outdated = bool(find_imager())
     if system == "windows":
         if not is_elevated():
-            raise ImagerError("Abra a CLI em um terminal como Administrador para instalar o Raspberry Pi Imager.")
-        _install_windows_imager(progress)
+            action = "atualizar" if outdated else "instalar"
+            raise ImagerError(f"Abra a CLI em um terminal como Administrador para {action} o Raspberry Pi Imager.")
+        if outdated:
+            if progress:
+                progress("A versão do Imager é antiga; atualizando pelo instalador oficial...")
+            _install_official_windows_imager(progress)
+        else:
+            _install_windows_imager(progress)
     elif system == "linux" and shutil.which("apt-get"):
-        command = ["apt-get", "update"]
-        if progress:
-            progress("Atualizando índice de pacotes para instalar Raspberry Pi Imager...")
-        _run_install(command)
-        command = ["apt-get", "install", "-y", "rpi-imager"]
-        if progress:
-            progress("Instalando Raspberry Pi Imager...")
-        _run_install(command)
+        if outdated:
+            if progress:
+                progress("A versão do Imager é antiga; baixando a versão oficial atualizada...")
+            _install_official_linux_imager()
+        else:
+            command = ["apt-get", "update"]
+            if progress:
+                progress("Atualizando índice de pacotes para instalar Raspberry Pi Imager...")
+            _run_install(command)
+            command = ["apt-get", "install", "-y", "rpi-imager"]
+            if progress:
+                progress("Instalando Raspberry Pi Imager...")
+            _run_install(command)
     else:
         raise ImagerError("Instalação automática disponível apenas via apt no Debian/Ubuntu ou winget no Windows.")
-    executable = find_imager()
-    if not executable:
-        raise ImagerError("A instalação terminou, mas o executável rpi-imager não foi localizado.")
-    _require_first_run_support(executable)
-    return executable
+    supported = _first_supported_imager()
+    if not supported:
+        raise ImagerError(
+            "A instalação/atualização terminou, mas nenhum executável rpi-imager compatível foi localizado. "
+            "Instale manualmente pelo site https://www.raspberrypi.com/software/ e tente de novo."
+        )
+    return supported
 
 
 def _install_windows_imager(progress: Optional[Callable[[str], None]] = None) -> None:

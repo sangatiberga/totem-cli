@@ -49,11 +49,11 @@ class TestEnsureImagerWindows(unittest.TestCase):
         active = []
         self._patch_platform(active)
         with patch("shutil.which", return_value="C:\\winget.exe"), \
-                patch.object(imager, "find_imager", side_effect=[None, FAKE_EXE]) as finder, \
+                patch.object(imager, "find_all_imagers", side_effect=[[], [], [FAKE_EXE]]) as finder, \
                 patch("subprocess.run", return_value=_completed(0)) as mock_run, \
                 patch("urllib.request.urlopen") as mock_urlopen:
             self.assertEqual(imager.ensure_imager(), FAKE_EXE)
-            self.assertEqual(finder.call_count, 2)
+            self.assertEqual(finder.call_count, 3)
             winget_calls = [c.args[0] for c in mock_run.call_args_list if "winget" in str(c.args[0][0])]
             self.assertEqual(len(winget_calls), 1)
             mock_urlopen.assert_not_called()
@@ -63,7 +63,7 @@ class TestEnsureImagerWindows(unittest.TestCase):
         self._patch_platform(active)
         messages = []
         with patch("shutil.which", return_value="C:\\winget.exe"), \
-                patch.object(imager, "find_imager", side_effect=[None, FAKE_EXE]), \
+                patch.object(imager, "find_all_imagers", side_effect=[[], [], [FAKE_EXE]]), \
                 patch("urllib.request.urlopen",
                       side_effect=[_api_response(["imager-v2.0.12.exe"]), _download_response()]), \
                 patch("subprocess.run") as mock_run:
@@ -85,7 +85,7 @@ class TestEnsureImagerWindows(unittest.TestCase):
         active = []
         self._patch_platform(active)
         with patch("shutil.which", return_value=None), \
-                patch.object(imager, "find_imager", side_effect=[None, FAKE_EXE]), \
+                patch.object(imager, "find_all_imagers", side_effect=[[], [], [FAKE_EXE]]), \
                 patch("urllib.request.urlopen",
                       side_effect=[_api_response(["imager-v2.0.12.exe"]), _download_response()]), \
                 patch("subprocess.run", return_value=_completed(0)) as mock_run:
@@ -97,7 +97,7 @@ class TestEnsureImagerWindows(unittest.TestCase):
         active = []
         self._patch_platform(active)
         with patch("shutil.which", return_value=None), \
-                patch.object(imager, "find_imager", return_value=None), \
+                patch.object(imager, "find_all_imagers", return_value=[]), \
                 patch("urllib.request.urlopen",
                       side_effect=[_api_response(["imager-v2.0.12.AppImage"]), _download_response()]), \
                 patch("subprocess.run") as mock_run:
@@ -111,9 +111,9 @@ class TestEnsureImagerWindows(unittest.TestCase):
         self._patch_platform(active)
         old_exe = "C:\\Program Files\\Raspberry Pi Imager\\rpi-imager.exe"
         new_exe = "C:\\Program Files\\Raspberry Pi Ltd\\Imager\\rpi-imager.exe"
-        with patch.object(imager, "find_imager", side_effect=[old_exe, new_exe]), \
+        with patch.object(imager, "find_all_imagers", side_effect=[[old_exe], [old_exe], [old_exe, new_exe]]), \
                 patch.object(imager, "_require_first_run_support",
-                             side_effect=[imager.ImagerError("old"), None]), \
+                             side_effect=[imager.ImagerError("old"), imager.ImagerError("old"), None]), \
                 patch("urllib.request.urlopen",
                       side_effect=[_api_response(["imager-v2.0.12.exe"]), _download_response()]), \
                 patch("subprocess.run", return_value=_completed(0)) as mock_run:
@@ -123,11 +123,25 @@ class TestEnsureImagerWindows(unittest.TestCase):
             self.assertEqual(len(installer_calls), 1)
             self.assertIn("/VERYSILENT", installer_calls[0])
 
+    def test_usable_copy_beside_outdated_one_needs_no_upgrade(self):
+        active = []
+        self._patch_platform(active)
+        old_exe = "C:\\Program Files\\Raspberry Pi Imager\\rpi-imager.exe"
+        new_exe = "C:\\Program Files\\Raspberry Pi Ltd\\Imager\\rpi-imager.exe"
+        with patch.object(imager, "find_all_imagers", return_value=[old_exe, new_exe]), \
+                patch.object(imager, "_require_first_run_support",
+                             side_effect=[imager.ImagerError("old"), None]), \
+                patch("subprocess.run") as mock_run, \
+                patch("urllib.request.urlopen") as mock_urlopen:
+            self.assertEqual(imager.ensure_imager(), new_exe)
+            mock_run.assert_not_called()
+            mock_urlopen.assert_not_called()
+
     def test_not_elevated_aborts_before_any_install_attempt(self):
         active = []
         self._patch_platform(active)
         with patch.object(imager, "is_elevated", return_value=False), \
-                patch.object(imager, "find_imager", return_value=None), \
+                patch.object(imager, "find_all_imagers", return_value=[]), \
                 patch("subprocess.run") as mock_run, \
                 patch("urllib.request.urlopen") as mock_urlopen:
             with self.assertRaises(imager.ImagerError):
