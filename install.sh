@@ -58,6 +58,7 @@ if not binary or not checksums:
 print("BIN_URL=" + shlex.quote(binary["browser_download_url"]))
 print("BIN_NAME=" + shlex.quote(binary["name"]))
 print("CHECKSUMS_URL=" + shlex.quote(checksums["browser_download_url"]))
+print("RELEASE_TAG=" + shlex.quote(release.get("tag_name", "(sem tag)")))
 ')"
 
 echo "Baixando ${BIN_NAME} da última release..."
@@ -88,4 +89,7 @@ else
     cp "${TMP_DIR}/${BIN_NAME}" "$DEST"
     echo "Instalado em ${DEST}. Garanta ~/.local/bin no PATH e reabra o terminal." >&2
 fi
-echo "Totem CLI instalada em ${DEST}. Execute: totem"
+echo "Totem CLI instalada com sucesso."
+echo "Release instalada: ${RELEASE_TAG:-}"
+echo "Executavel: ${DEST}"
+echo "Execute: totem"

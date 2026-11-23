@@ -52,7 +52,13 @@ try {
         [System.Environment]::SetEnvironmentVariable('PATH', "$UserPath;$InstallDirectory", 'User')
         Write-Host 'Diretório adicionado ao PATH do usuário. Feche e reabra o PowerShell.'
     }
-    Write-Host "Totem CLI instalada. Execute: totem"
+    $InstalledVersion = $Release.tag_name
+    if (-not $InstalledVersion) { $InstalledVersion = '(release sem tag)' }
+    Write-Host ""
+    Write-Host "Totem CLI instalada com sucesso."
+    Write-Host "Release instalada: $InstalledVersion"
+    Write-Host "Executavel: $Destination"
+    Write-Host "Abra um novo PowerShell e execute: totem"
 }
 finally {
     Remove-Item -Recurse -Force $TempDirectory -ErrorAction SilentlyContinue
