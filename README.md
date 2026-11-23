@@ -49,7 +49,7 @@ totem
 
 Para gravar um cartão, abra o PowerShell como Administrador e execute `totem`.
 
-O instalador obtém a versão mais recente publicada. Ao publicar uma tag `v*`, o workflow de release anexa os arquivos `.whl`, `.tar.gz` e `checksums.txt` à release do GitHub. O workflow de CI executa os testes em Ubuntu e Windows para Python 3.11, 3.12 e 3.13.
+O instalador obtém a versão mais recente publicada. Ao publicar uma tag `v*`, o workflow de release anexa os arquivos `.whl`, `.tar.gz` e `checksums.txt` à release do GitHub.
 
 Para desenvolvimento, clone o repositório e instale em modo editável com `pipx install --editable .`.
 
