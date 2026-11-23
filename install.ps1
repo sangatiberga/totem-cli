@@ -38,9 +38,15 @@ try {
     Invoke-WebRequest -Uri $Binary.browser_download_url -OutFile $DownloadPath
     Invoke-WebRequest -Uri $Checksums.browser_download_url -OutFile $ChecksumsPath
 
-    $ExpectedHashes = @(Get-Content $ChecksumsPath |
-        Where-Object { $_ -match ("\s+" + [regex]::Escape($AssetName) + '$') } |
-        ForEach-Object { ($_ -split '\s+')[0].ToLowerInvariant() })
+    if ($Binary.digest -and $Binary.digest -match '^sha256:([0-9a-fA-F]{64})$') {
+        # Preferred source: digest served by the API itself (no CDN staleness).
+        $ExpectedHashes = @($Matches[1].ToLowerInvariant())
+    }
+    else {
+        $ExpectedHashes = @(Get-Content $ChecksumsPath |
+            Where-Object { $_ -match ("\s+" + [regex]::Escape($AssetName) + '$') } |
+            ForEach-Object { ($_ -split '\s+')[0].ToLowerInvariant() })
+    }
     if (-not $ExpectedHashes) { throw "Checksum de $AssetName não encontrado." }
     $ActualHash = (Get-FileHash -Algorithm SHA256 -Path $DownloadPath).Hash.ToLowerInvariant()
     if ($ActualHash -notin $ExpectedHashes) { throw 'O checksum SHA-256 do binário não confere.' }

@@ -56,6 +56,7 @@ checksums = next((a for a in release.get("assets", []) if a.get("name") == "chec
 if not binary or not checksums:
     sys.exit("a release não contém o binário e o checksums.txt esperados")
 print("BIN_URL=" + shlex.quote(binary["browser_download_url"]))
+print("BIN_DIGEST=" + shlex.quote(str(binary.get("digest", ""))))
 print("BIN_NAME=" + shlex.quote(binary["name"]))
 print("CHECKSUMS_URL=" + shlex.quote(checksums["browser_download_url"]))
 print("RELEASE_TAG=" + shlex.quote(release.get("tag_name", "(sem tag)")))
@@ -65,7 +66,11 @@ echo "Baixando ${BIN_NAME} da última release..."
 curl -fsSL -o "${TMP_DIR}/${BIN_NAME}" "$BIN_URL"
 curl -fsSL -o "${TMP_DIR}/checksums.txt" "$CHECKSUMS_URL"
 
-EXPECTED_SHAS="$(awk -v name="$BIN_NAME" '$2 == name { print $1 }' "${TMP_DIR}/checksums.txt")"
+if [ -n "${BIN_DIGEST:-}" ]; then
+    EXPECTED_SHAS="${BIN_DIGEST#sha256:}"
+else
+    EXPECTED_SHAS="$(awk -v name="$BIN_NAME" '$2 == name { print $1 }' "${TMP_DIR}/checksums.txt")"
+fi
 if [ -z "$EXPECTED_SHAS" ]; then
     echo "Erro: checksum de ${BIN_NAME} não encontrado." >&2
     exit 1
