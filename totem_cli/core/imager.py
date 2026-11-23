@@ -595,7 +595,8 @@ def _sudo_prefix() -> list[str]:
 
 def build_flash_command(executable: str, image_uri: str, target_device: str,
                         expected_sha256: Optional[str] = None,
-                        first_run_script: Optional[str] = None) -> list[str]:
+                        first_run_script: Optional[str] = None,
+                        log_file: Optional[str] = None) -> list[str]:
     if os.name == "nt" and not is_elevated():
         raise ImagerError("A gravação no Windows exige abrir o terminal como Administrador.")
     args = [executable, "--cli"]
@@ -605,5 +606,21 @@ def build_flash_command(executable: str, image_uri: str, target_device: str,
         args.extend(["--sha256", expected_sha256])
     if first_run_script:
         args.extend(["--first-run-script", first_run_script])
+    if log_file:
+        args.extend(["--log-file", log_file])
     args.extend([image_uri, target_device])
     return args
+
+
+def read_imager_log_tail(log_file: str, max_chars: int = 900) -> str:
+    """Last lines of the Imager --log-file, for surfacing real failures.
+
+    On Windows the CLI writes progress/errors to the attached console rather
+    than the pipe we capture, so this file is the reliable error channel.
+    """
+    try:
+        text = Path(log_file).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return "\n".join(lines[-12:])[-max_chars:]

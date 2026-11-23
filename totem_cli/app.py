@@ -28,6 +28,7 @@ from totem_cli.core.imager import (
     build_flash_command,
     ensure_imager,
     is_elevated,
+    read_imager_log_tail,
     resolve_bookworm_image,
     unmount_device_partitions,
     verify_first_run_script,
@@ -853,8 +854,10 @@ class ProgressFlashScreen(BaseScreen):
                     await asyncio.to_thread(unmount_device_partitions, self.target_disk)
                     phase(3, "Apagando o conteúdo anterior do cartão…", 27)
                     await asyncio.to_thread(wipe_device_signatures, self.target_disk)
+                log_path = Path(temp_dir) / "imager.log"
                 command = build_flash_command(
-                    executable, image_uri, self.target_disk, expected_hash, str(script_path)
+                    executable, image_uri, self.target_disk, expected_hash, str(script_path),
+                    str(log_path),
                 )
                 phase(3, "Gravando a imagem com o Raspberry Pi Imager — não remova o cartão…", 25)
                 phase(3, "Iniciando a gravação…", 28)
@@ -889,7 +892,9 @@ class ProgressFlashScreen(BaseScreen):
                     last_output = output_buffer.strip()
                 return_code = await process.wait()
                 if return_code != 0:
-                    raise ImagerError(last_output or f"Raspberry Pi Imager encerrou com código {return_code}.")
+                    log_tail = read_imager_log_tail(str(log_path))
+                    detail = log_tail or last_output or f"Raspberry Pi Imager encerrou com código {return_code}."
+                    raise ImagerError(detail)
 
                 if os.name != "nt":
                     phase(5, "Montando a partição de boot (somente leitura) para conferir o firstrun.sh…", 95)

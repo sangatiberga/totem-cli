@@ -137,6 +137,28 @@ class TestEnsureImagerWindows(unittest.TestCase):
             mock_run.assert_not_called()
             mock_urlopen.assert_not_called()
 
+    def test_flash_command_includes_log_file_and_log_tail(self):
+        with patch.object(imager, "is_elevated", return_value=True):
+            command = imager.build_flash_command(
+                "rpi-imager", "https://example.com/img.xz", "dest",
+                "a" * 64, "script.sh", "imager.log",
+            )
+        self.assertIn("--log-file", command)
+        self.assertIn("imager.log", command)
+        self.assertEqual(command[-2:], ["https://example.com/img.xz", "dest"])
+        import tempfile as _tf
+        with _tf.NamedTemporaryFile("w", suffix=".log", delete=False) as fh:
+            fh.write("\n".join(f"linha {i}" for i in range(30)))
+            name = fh.name
+        try:
+            tail = imager.read_imager_log_tail(name)
+            self.assertIn("linha 29", tail)
+            self.assertNotIn("linha 0", tail)
+        finally:
+            import os as _os
+            _os.unlink(name)
+        self.assertEqual(imager.read_imager_log_tail("/nao/existe.log"), "")
+
     def test_windows_probe_accepts_v2_despite_empty_help(self):
         def run(cmd, **kwargs):
             if cmd[0] == "powershell":
