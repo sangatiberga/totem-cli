@@ -13,32 +13,34 @@ Assistente de terminal para preparar e administrar Totens baseados em Raspberry 
 
 ## Comando `totem`
 
-O comando da ferramenta é `totem`. Os instaladores baixam a wheel da última release do GitHub, verificam o checksum SHA-256 e instalam a CLI com `pipx`; não é necessário clonar o projeto. Requer Python 3.11 ou superior.
+O comando da ferramenta é `totem`. Os instaladores baixam a wheel da última release do GitHub, verificam o checksum SHA-256 e instalam a CLI com `pipx`; não é necessário clonar o projeto. Requer Python 3.11 ou superior e acesso ao repositório privado `sangatiberga/totem-cli` pelo GitHub CLI (`gh`).
 
 ### Linux (Ubuntu/Debian)
 
-Instale Python 3.11 ou superior e `pipx`. No Ubuntu/Debian:
+Instale Python 3.11 ou superior, `pipx` e GitHub CLI (`gh`). No Ubuntu/Debian:
 
 ```bash
 sudo apt update
-sudo apt install pipx
+sudo apt install pipx gh
 pipx ensurepath
 ```
 
-Feche e reabra o terminal. Execute o instalador:
+Feche e reabra o terminal, autentique-se com uma conta que tenha acesso ao repositório e execute o instalador:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sangatiberga/totem-cli/main/install.sh | sh
+gh auth login --hostname github.com
+gh api repos/sangatiberga/totem-cli/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
 ```
 
 Depois, inicie a ferramenta com `totem`. Antes de gravar um cartão, a CLI solicitará a senha `sudo` em um campo mascarado.
 
 ### Windows
 
-Instale Python 3.11 ou superior. No PowerShell, execute o instalador:
+Instale Python 3.11 ou superior e GitHub CLI (`gh`). No PowerShell, autentique-se com uma conta que tenha acesso ao repositório e execute o instalador:
 
 ```powershell
-irm https://raw.githubusercontent.com/sangatiberga/totem-cli/main/install.ps1 | iex
+gh auth login --hostname github.com
+gh api repos/sangatiberga/totem-cli/contents/install.ps1 -H "Accept: application/vnd.github.raw" | iex
 ```
 
 O instalador instala `pipx` se necessário. Feche e reabra o PowerShell e inicie a ferramenta:
