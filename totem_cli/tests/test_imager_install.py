@@ -106,6 +106,23 @@ class TestEnsureImagerWindows(unittest.TestCase):
             self.assertFalse(any("rpi-imager-setup.exe" in str(c.args[0][0])
                                  for c in mock_run.call_args_list))
 
+    def test_outdated_imager_upgrades_via_official_installer(self):
+        active = []
+        self._patch_platform(active)
+        old_exe = "C:\\Program Files\\Raspberry Pi Imager\\rpi-imager.exe"
+        new_exe = "C:\\Program Files\\Raspberry Pi Ltd\\Imager\\rpi-imager.exe"
+        with patch.object(imager, "find_imager", side_effect=[old_exe, new_exe]), \
+                patch.object(imager, "_require_first_run_support",
+                             side_effect=[imager.ImagerError("old"), None]), \
+                patch("urllib.request.urlopen",
+                      side_effect=[_api_response(["imager-v2.0.12.exe"]), _download_response()]), \
+                patch("subprocess.run", return_value=_completed(0)) as mock_run:
+            self.assertEqual(imager.ensure_imager(), new_exe)
+            installer_calls = [c.args[0] for c in mock_run.call_args_list
+                               if str(c.args[0][0]).endswith("rpi-imager-setup.exe")]
+            self.assertEqual(len(installer_calls), 1)
+            self.assertIn("/VERYSILENT", installer_calls[0])
+
     def test_not_elevated_aborts_before_any_install_attempt(self):
         active = []
         self._patch_platform(active)

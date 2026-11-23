@@ -199,11 +199,19 @@ def ensure_imager(progress: Optional[Callable[[str], None]] = None) -> str:
             _require_first_run_support(executable)
             return executable
         except ImagerError:
-            if platform.system().lower() != "linux" or not shutil.which("apt-get"):
+            system = platform.system().lower()
+            if system == "windows":
+                if not is_elevated():
+                    raise ImagerError("Abra a CLI em um terminal como Administrador para atualizar o Raspberry Pi Imager.")
+                if progress:
+                    progress("A versão do Imager é antiga; atualizando pelo instalador oficial...")
+                _install_official_windows_imager(progress)
+            elif system == "linux" and shutil.which("apt-get"):
+                if progress:
+                    progress("A versão do Imager é antiga; baixando a versão oficial atualizada...")
+                _install_official_linux_imager()
+            else:
                 raise
-            if progress:
-                progress("A versão do Imager é antiga; baixando a versão oficial atualizada...")
-            _install_official_linux_imager()
             executable = find_imager()
             if not executable:
                 raise ImagerError("A atualização terminou, mas rpi-imager não foi localizado.")
