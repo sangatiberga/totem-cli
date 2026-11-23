@@ -29,6 +29,7 @@ from totem_cli.core.imager import (
     ensure_imager,
     is_elevated,
     read_imager_log_tail,
+    wait_imager_log_tail,
     resolve_bookworm_image,
     unmount_device_partitions,
     verify_first_run_script,
@@ -854,7 +855,9 @@ class ProgressFlashScreen(BaseScreen):
                     await asyncio.to_thread(unmount_device_partitions, self.target_disk)
                     phase(3, "Apagando o conteúdo anterior do cartão…", 27)
                     await asyncio.to_thread(wipe_device_signatures, self.target_disk)
-                log_path = Path(temp_dir) / "imager.log"
+                # Keep the Imager log outside the temp dir so the operator can
+                # send it for diagnosis even after this screen closes.
+                log_path = Path(tempfile.gettempdir()) / "totem-imager.log"
                 command = build_flash_command(
                     executable, image_uri, self.target_disk, expected_hash, str(script_path),
                     str(log_path),
@@ -892,8 +895,8 @@ class ProgressFlashScreen(BaseScreen):
                     last_output = output_buffer.strip()
                 return_code = await process.wait()
                 if return_code != 0:
-                    log_tail = read_imager_log_tail(str(log_path))
-                    detail = log_tail or last_output or f"Raspberry Pi Imager encerrou com código {return_code}."
+                    log_tail = await asyncio.to_thread(wait_imager_log_tail, str(log_path))
+                    detail = (log_tail or last_output or f"Raspberry Pi Imager encerrou com código {return_code}.") + f"\nLog completo em: {log_path}"
                     raise ImagerError(detail)
 
                 if os.name != "nt":

@@ -159,6 +159,25 @@ class TestEnsureImagerWindows(unittest.TestCase):
             _os.unlink(name)
         self.assertEqual(imager.read_imager_log_tail("/nao/existe.log"), "")
 
+    def test_wait_imager_log_waits_for_late_lines(self):
+        import tempfile as _tf, threading, time as _time
+        with _tf.NamedTemporaryFile("w", suffix=".log", delete=False) as fh:
+            fh.write("*** Raspberry Pi Imager started ***\n")
+            name = fh.name
+
+        def writer():
+            _time.sleep(0.6)
+            with open(name, "a") as fh:
+                fh.write("Error: drive is locked\n")
+
+        import os as _os
+        try:
+            threading.Thread(target=writer).start()
+            tail = imager.wait_imager_log_tail(name, timeout_s=5)
+            self.assertIn("drive is locked", tail)
+        finally:
+            _os.unlink(name)
+
     def test_windows_probe_accepts_v2_despite_empty_help(self):
         def run(cmd, **kwargs):
             if cmd[0] == "powershell":

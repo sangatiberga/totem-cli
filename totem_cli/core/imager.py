@@ -624,3 +624,30 @@ def read_imager_log_tail(log_file: str, max_chars: int = 900) -> str:
         return ""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     return "\n".join(lines[-12:])[-max_chars:]
+
+
+def wait_imager_log_tail(log_file: str, timeout_s: float = 6.0, max_chars: int = 900) -> str:
+    """Poll the log briefly after a failure until its size stops changing.
+
+    The Imager can exit while its log writer is still flushing, so reading
+    once immediately can catch only the header line.
+    """
+    deadline = time.monotonic() + timeout_s
+    last_size = -1
+    stable_reads = 0
+    tail = ""
+    while time.monotonic() < deadline:
+        try:
+            size = Path(log_file).stat().st_size
+        except OSError:
+            size = 0
+        tail = read_imager_log_tail(log_file, max_chars)
+        if size == last_size and tail:
+            stable_reads += 1
+            if stable_reads >= 2:
+                break
+        else:
+            stable_reads = 0
+        last_size = size
+        time.sleep(0.4)
+    return tail
