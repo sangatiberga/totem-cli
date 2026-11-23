@@ -1,24 +1,13 @@
 #!/bin/sh
-# Instala a Totem CLI (binário compilado, sem Python/pipx) a partir da
-# última release privada do GitHub.
+# Instala a Totem CLI (binário compilado) a partir da última release do GitHub.
 #
-# 1. Crie um token em https://github.com/settings/tokens com acesso de
-#    leitura ao conteúdo do repositório sangatiberga/totem-cli
-#    (fine-grained: Contents Read-only; ou clássico com escopo repo).
-# 2. Instalação em um comando:
-#      export GITHUB_TOKEN='SEU_TOKEN'; curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" https://raw.githubusercontent.com/sangatiberga/totem-cli/main/install.sh | sh
-#    Ou baixe este arquivo pelo navegador (logado no GitHub) e execute:
-#      GITHUB_TOKEN='SEU_TOKEN' sh install.sh
+# Instalação em um comando:
+#   curl -fsSL https://raw.githubusercontent.com/sangatiberga/totem-cli/main/install.sh | sh
+# Ou baixe este arquivo e execute: sh install.sh
 
 set -eu
 
 REPO="${TOTEM_REPO:-sangatiberga/totem-cli}"
-
-if [ -z "${GITHUB_TOKEN:-}" ]; then
-    echo "Erro: defina GITHUB_TOKEN com um token de leitura do repositório ${REPO}." >&2
-    echo "Exemplo: GITHUB_TOKEN='SEU_TOKEN' sh install.sh" >&2
-    exit 1
-fi
 
 if ! command -v curl >/dev/null 2>&1; then
     echo "Erro: curl não foi encontrado. Instale-o e tente novamente." >&2
@@ -27,6 +16,11 @@ fi
 
 if ! command -v sha256sum >/dev/null 2>&1; then
     echo "Erro: sha256sum não foi encontrado. Instale-o e tente novamente." >&2
+    exit 1
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "Erro: python3 é necessário para ler a resposta da API do GitHub." >&2
     exit 1
 fi
 
@@ -45,12 +39,8 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
 echo "Consultando a última release de ${REPO}..."
-API_JSON="$(curl -fsSL \
-    -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-    -H 'Accept: application/vnd.github+json' \
-    -H 'X-GitHub-Api-Version: 2022-11-28' \
-    "https://api.github.com/repos/${REPO}/releases/latest")" || {
-    echo "Erro: não foi possível consultar a última release. Verifique o token e o acesso ao repositório." >&2
+API_JSON="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")" || {
+    echo "Erro: não foi possível consultar a última release." >&2
     exit 1
 }
 
@@ -71,14 +61,8 @@ print("CHECKSUMS_URL=" + shlex.quote(checksums["browser_download_url"]))
 ')"
 
 echo "Baixando ${BIN_NAME} da última release..."
-curl -fsSL \
-    -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-    -H 'Accept: application/octet-stream' \
-    -o "${TMP_DIR}/${BIN_NAME}" "$BIN_URL"
-curl -fsSL \
-    -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-    -H 'Accept: application/octet-stream' \
-    -o "${TMP_DIR}/checksums.txt" "$CHECKSUMS_URL"
+curl -fsSL -o "${TMP_DIR}/${BIN_NAME}" "$BIN_URL"
+curl -fsSL -o "${TMP_DIR}/checksums.txt" "$CHECKSUMS_URL"
 
 EXPECTED_SHA="$(awk -v name="$BIN_NAME" '$2 == name { print $1 }' "${TMP_DIR}/checksums.txt")"
 if [ -z "$EXPECTED_SHA" ]; then
