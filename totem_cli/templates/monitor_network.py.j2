@@ -1,0 +1,525 @@
+# -*- coding: utf-8 -*-
+"""Nexus Totem network monitor; started by the Openbox kiosk session."""
+import os
+import sys
+import time
+import socket
+import json
+import struct
+import base64
+import subprocess
+import threading
+import shutil
+import urllib.request
+import urllib.parse
+import http.server
+import socketserver
+
+MONITOR_VERSION = "2.0.0"
+USERNAME = "{{ username }}"
+HOME = "/home/{{ username }}"
+ONLINE_URL = {{ nexus_url_json }}
+OFFLINE_URL = "http://127.0.0.1:8000/offline.html"
+APP_HOST = {{ app_host_json }}
+APP_PORT = {{ app_port }}
+CHECK_INTERVAL = 5
+OFFLINE_REBOOT_MINUTES = 15
+MAX_AUTO_REBOOTS_PER_HOUR = 3
+LOG_PATH = HOME + "/monitor.log"
+OFFLINE_FILE = HOME + "/offline.html"
+REBOOT_STATE = "/tmp/nexus_auto_reboots.json"
+
+STATE = {"state": "UNKNOWN", "layer": "-", "ssid": "-", "ip": "-",
+         "chromium": "unknown", "last_repair": "-", "version": MONITOR_VERSION,
+         "boot_time": time.strftime("%Y-%m-%d %H:%M:%S"), "offline_since": None}
+
+
+def log_message(msg):
+    line = "[%s] %s" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg)
+    try:
+        print(line, flush=True)
+    except Exception:
+        pass
+    try:
+        if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 1048576:
+            with open(LOG_PATH, "rb") as f:
+                try:
+                    f.seek(-200000, os.SEEK_END)
+                except OSError:
+                    f.seek(0)
+                tail = f.read().split(b"\n", 1)[-1]
+            with open(LOG_PATH, "wb") as f:
+                f.write(tail)
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
+def run_out(cmd, timeout=10):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout).stdout.strip()
+    except Exception:
+        return ""
+
+
+def check_link():
+    """Camada 1: Wi-Fi/rede local OK? Retorna (ok, ssid, ip)."""
+    ssid, ip = "-", "-"
+    try:
+        active = run_out(["nmcli", "-t", "-f", "NAME,DEVICE,STATE", "con",
+                          "show", "--active"], timeout=8)
+        wifi_active = "wlan0" in active and "activated" in active
+    except Exception:
+        wifi_active = False
+    try:
+        scan = run_out(["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
+                       timeout=12)
+        for line in scan.splitlines():
+            if line.startswith("yes:"):
+                ssid = line.split(":", 1)[1] or "?"
+                break
+    except Exception:
+        pass
+    oper = ""
+    try:
+        with open("/sys/class/net/wlan0/operstate") as f:
+            oper = f.read().strip()
+    except Exception:
+        pass
+    addr = run_out(["ip", "-4", "-o", "addr", "show", "wlan0"], timeout=8)
+    if "inet " in addr:
+        try:
+            ip = addr.split("inet ")[1].split()[0].split("/")[0]
+        except (IndexError, ValueError):
+            ip = "?"
+    ok = bool(wifi_active or (oper == "up" and ip not in ("-", "?", "")))
+    return ok, ssid, ip
+
+
+def check_app():
+    """Camada 2: servidor da aplicacao alcancavel?"""
+    try:
+        s = socket.create_connection((APP_HOST, APP_PORT), timeout=4)
+        s.close()
+        return True
+    except Exception as e:
+        log_message("app inacessivel (%s:%s): %s" % (APP_HOST, APP_PORT, e))
+        return False
+
+
+def ws_send(s, msg):
+    b = msg.encode()
+    m = os.urandom(4)
+    h = bytes([0x81])
+    n = len(b)
+    if n < 126:
+        h += bytes([0x80 | n])
+    elif n < 65536:
+        h += bytes([0x80 | 126]) + struct.pack("!H", n)
+    else:
+        h += bytes([0x80 | 127]) + struct.pack("!Q", n)
+    h += m
+    h += bytes([x ^ m[i % 4] for i, x in enumerate(b)])
+    s.sendall(h)
+
+
+def ws_recv(s, timeout=5):
+    s.settimeout(timeout)
+    h = s.recv(2)
+    if len(h) < 2:
+        raise IOError("ws frame curto")
+    ln = h[1] & 0x7F
+    if ln == 126:
+        ln = struct.unpack("!H", s.recv(2))[0]
+    elif ln == 127:
+        ln = struct.unpack("!Q", s.recv(8))[0]
+    data = b""
+    while len(data) < ln:
+        chunk = s.recv(ln - len(data))
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
+def cdp_evaluate(ws_url, expression, timeout=6):
+    u = urllib.parse.urlparse(ws_url)
+    s = socket.create_connection((u.hostname, u.port), timeout=timeout)
+    try:
+        key = base64.b64encode(os.urandom(16)).decode()
+        s.sendall(("GET " + u.path + " HTTP/1.1\r\nHost: 127.0.0.1:9222\r\n"
+                   "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                   "Sec-WebSocket-Key: " + key + "\r\n"
+                   "Sec-WebSocket-Version: 13\r\n\r\n").encode())
+        resp = s.recv(1024)
+        if b"101" not in resp.split(b"\r\n")[0]:
+            raise IOError("ws handshake falhou: %r" % resp[:60])
+        payload = json.dumps({"id": 1, "method": "Runtime.evaluate",
+                              "params": {"expression": expression,
+                                         "returnByValue": True}})
+        ws_send(s, payload)
+        return json.loads(ws_recv(s, timeout=timeout).decode())
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def cdp_navigate(ws_url, url, timeout=6):
+    expr = "(function(){window.location.href=%s;return true;})()" % json.dumps(url)
+    r = cdp_evaluate(ws_url, expr, timeout=timeout)
+    return bool(r.get("result", {}).get("result", {}).get("value"))
+
+
+def get_kiosk_ws():
+    for endpoint in ("/json/list", "/json"):
+        try:
+            req = urllib.request.urlopen("http://127.0.0.1:9222" + endpoint,
+                                         timeout=3)
+            pages = json.loads(req.read().decode())
+            if isinstance(pages, list) and pages:
+                page = next((p for p in pages if p.get("type") == "page"),
+                            pages[0])
+                ws = page.get("webSocketDebuggerUrl")
+                if ws:
+                    return ws
+        except Exception:
+            continue
+    return None
+
+
+def chromium_cmd(target_url):
+    exe = "chromium"
+    if shutil.which("chromium"):
+        exe = "chromium"
+    elif shutil.which("chromium-browser"):
+        exe = "chromium-browser"
+    cmd = [exe, "--kiosk", "--remote-debugging-port=9222",
+           "--remote-debugging-address=0.0.0.0",
+           "--remote-allow-origins=*", "--noerrdialogs",
+           "--disable-infobars", "--disable-session-crashed-bubble",
+           "--disable-features=Translate,TranslateUI", "--disable-translate",
+           "--disable-save-password-bubble",
+           "--lang=pt-BR", "--user-data-dir=" + HOME + "/.config/chromium-kiosk",
+           "--accept-lang=pt-BR,pt,en-US,en",
+           "--overscroll-history-navigation=0"]
+    ext = HOME + "/.config/nexus-extension"
+    if os.path.isdir(ext):
+        cmd.append("--load-extension=" + ext)
+    cmd.append(target_url)
+    return cmd
+
+
+def chromium_env():
+    env = os.environ.copy()
+    env.setdefault("DISPLAY", ":0")
+    env.setdefault("XAUTHORITY", HOME + "/.Xauthority")
+    return env
+
+
+def ensure_chromium(target_url):
+    """Garante o Chromium aberto no target: adota via 9222 ou (re)lanca."""
+    ws = get_kiosk_ws()
+    if ws:
+        try:
+            if cdp_navigate(ws, target_url):
+                STATE["chromium"] = "adopted-9222"
+                return True
+        except Exception as e:
+            log_message("navigate falhou, relancando: %s" % e)
+    else:
+        procs = run_out(["pgrep", "-af", "chromium-kiosk"], timeout=5)
+        if procs:
+            log_message("chromium sem 9222, aguardando 10s...")
+            time.sleep(10)
+            ws = get_kiosk_ws()
+            if ws:
+                try:
+                    if cdp_navigate(ws, target_url):
+                        STATE["chromium"] = "adopted-9222"
+                        return True
+                except Exception as e:
+                    log_message("navigate pos-espera falhou: %s" % e)
+    log_message("relancando chromium em %s" % target_url)
+    try:
+        subprocess.run(["killall", "-9", "chromium", "chromium-browser"],
+                       stderr=subprocess.DEVNULL, timeout=10)
+    except Exception:
+        pass
+    time.sleep(1)
+    try:
+        with open(HOME + "/chromium.log", "a", encoding="utf-8") as f:
+            f.write("\n--- CHROMIUM %s %s ---\n"
+                    % (MONITOR_VERSION, time.strftime("%Y-%m-%d %H:%M:%S")))
+        subprocess.Popen(chromium_cmd(target_url), env=chromium_env(),
+                         stdout=open(HOME + "/chromium.log", "a"),
+                         stderr=subprocess.STDOUT)
+        STATE["chromium"] = "relaunched"
+        return True
+    except Exception as e:
+        log_message("ERRO ao lancar chromium: %s" % e)
+        STATE["chromium"] = "launch-failed"
+        return False
+
+
+def navigate_or_relaunch(target_url):
+    ws = get_kiosk_ws()
+    if ws:
+        try:
+            if cdp_navigate(ws, target_url):
+                STATE["chromium"] = "navigated-9222"
+                return True
+        except Exception as e:
+            log_message("navigate falhou: %s" % e)
+    return ensure_chromium(target_url)
+
+
+def current_page_url():
+    ws = get_kiosk_ws()
+    if not ws:
+        return None
+    try:
+        r = cdp_evaluate(ws, "window.location.href")
+        return r.get("result", {}).get("result", {}).get("value")
+    except Exception:
+        return None
+
+
+def wifi_profile_name():
+    cons = run_out(["nmcli", "-t", "-f", "NAME,TYPE", "con", "show"],
+                   timeout=8)
+    for line in cons.splitlines():
+        if ":802-11-wireless" in line:
+            return line.split(":", 1)[0]
+    return None
+
+
+def wifi_repair(step):
+    """Escada de reparo Wi-Fi (requer sudoers do monitor). Retorna descricao."""
+    if os.path.exists(HOME + "/.config/nexus-wifi-disabled"):
+        return "disabled-by-operator"
+    prof = wifi_profile_name()
+    rung = step % 3
+    try:
+        if rung == 0:
+            subprocess.run(["sudo", "-n", "/usr/bin/nmcli", "device",
+                            "wifi", "rescan", "ifname", "wlan0"], timeout=25,
+                           capture_output=True)
+            if prof:
+                subprocess.run(["sudo", "-n", "/usr/bin/nmcli", "con", "up",
+                                prof], timeout=60, capture_output=True)
+            return "rescan+up"
+        if rung == 1:
+            subprocess.run(["sudo", "-n", "/usr/bin/nmcli", "radio", "wifi",
+                            "off"], timeout=15, capture_output=True)
+            time.sleep(2)
+            subprocess.run(["sudo", "-n", "/usr/bin/nmcli", "radio", "wifi",
+                            "on"], timeout=15, capture_output=True)
+            time.sleep(5)
+            if prof:
+                subprocess.run(["sudo", "-n", "/usr/bin/nmcli", "con", "up",
+                                prof], timeout=60, capture_output=True)
+            return "radio-cycle+up"
+        subprocess.run(["sudo", "-n", "/usr/bin/nmcli", "device",
+                        "disconnect", "wlan0"], timeout=20,
+                       capture_output=True)
+        time.sleep(2)
+        subprocess.run(["sudo", "-n", "/usr/bin/nmcli", "device", "connect",
+                        "wlan0"], timeout=60, capture_output=True)
+        return "device-reconnect"
+    except Exception as e:
+        log_message("reparo falhou: %s" % e)
+        return "failed"
+
+
+def auto_reboot_allowed():
+    try:
+        if os.path.exists(REBOOT_STATE):
+            with open(REBOOT_STATE) as f:
+                stamps = json.load(f)
+        else:
+            stamps = []
+    except Exception:
+        stamps = []
+    now = time.time()
+    stamps = [s for s in stamps if now - s < 3600]
+    if len(stamps) >= MAX_AUTO_REBOOTS_PER_HOUR:
+        return False
+    stamps.append(now)
+    try:
+        with open(REBOOT_STATE, "w") as f:
+            json.dump(stamps, f)
+    except Exception:
+        pass
+    return True
+
+
+def do_reboot(reason):
+    log_message("REBOOT automatico: %s" % reason)
+    time.sleep(1)
+    for exe in ("/sbin/reboot", "/usr/sbin/reboot"):
+        try:
+            subprocess.Popen(["sudo", "-n", exe],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+            return
+        except Exception:
+            continue
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def _send_json(self, obj, code=200):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/api/status":
+            payload = dict(STATE)
+            payload["time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            return self._send_json(payload)
+        if self.path in ("/", "/offline.html"):
+            try:
+                with open(OFFLINE_FILE, "rb") as f:
+                    body = f.read()
+            except OSError:
+                return self._send_json({"error": "offline.html ausente"},
+                                       code=500)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        return self._send_json({"error": "not found"}, code=404)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b""
+        if self.path == "/api/retry":
+            desc = wifi_repair(STATE.get("_repair_step", 0))
+            STATE["last_repair"] = "manual:" + desc
+            log_message("retry manual via pagina: %s" % desc)
+            return self._send_json({"ok": True, "repair": desc})
+        if self.path == "/api/reboot":
+            try:
+                body = json.loads(raw.decode() or "{}")
+            except ValueError:
+                body = {}
+            if not body.get("confirm"):
+                return self._send_json({"ok": False,
+                                        "error": "confirm required"},
+                                       code=400)
+            log_message("reboot manual via pagina")
+            t = threading.Thread(target=do_reboot, args=("botao pagina",),
+                                 daemon=True)
+            t.start()
+            return self._send_json({"ok": True, "rebooting": True})
+        return self._send_json({"error": "not found"}, code=404)
+
+
+def check_single_instance():
+    try:
+        global _instance_lock_socket
+        _instance_lock_socket = socket.socket(socket.AF_INET,
+                                              socket.SOCK_STREAM)
+        _instance_lock_socket.bind(("127.0.0.1", 19999))
+        _instance_lock_socket.listen(1)
+    except socket.error:
+        sys.stderr.write("monitor v2 ja em execucao, encerrando.\n")
+        sys.exit(0)
+
+
+def start_api():
+    socketserver.TCPServer.allow_reuse_address = True
+    server = socketserver.TCPServer(("127.0.0.1", 8000), Handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    return server
+
+
+def main():
+    check_single_instance()
+    start_api()
+    log_message("=== MONITOR v%s INICIADO ===" % MONITOR_VERSION)
+    current_state = None
+    repair_step = 0
+    offline_since = None
+
+    if get_kiosk_ws() is None:
+        ensure_chromium(OFFLINE_URL)
+        time.sleep(3)
+    else:
+        log_message("chromium adotado via 9222 (sem pre-navigate)")
+
+    while True:
+        try:
+            l1_ok, ssid, ip = check_link()
+            app_ok = check_app() if l1_ok else False
+            online = bool(l1_ok and app_ok)
+            detected = "ONLINE" if online else "OFFLINE"
+            layer = "-" if online else ("wifi" if not l1_ok else "server")
+            STATE.update({"state": detected, "layer": layer, "ssid": ssid,
+                          "ip": ip, "_repair_step": repair_step})
+
+            if not l1_ok:
+                desc = wifi_repair(repair_step)
+                STATE["last_repair"] = desc
+                log_message("L1 down, reparo[%d]: %s" % (repair_step, desc))
+                repair_step += 1
+                if offline_since is None:
+                    offline_since = time.time()
+                    STATE["offline_since"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                down_min = (time.time() - offline_since) / 60.0
+                if down_min >= OFFLINE_REBOOT_MINUTES:
+                    if auto_reboot_allowed():
+                        do_reboot("wifi down ha %.0f min" % down_min)
+                        time.sleep(120)
+                    else:
+                        log_message("reboot suprimido (limite/hora)")
+                        offline_since = time.time()
+            else:
+                repair_step = 0
+                offline_since = None
+                STATE["offline_since"] = None
+                if not online:
+                    STATE["last_repair"] = "-"
+
+            if detected != current_state:
+                log_message("estado %s -> %s (camada: %s)"
+                            % (current_state, detected, layer))
+                target = ONLINE_URL if online else OFFLINE_URL
+                if current_state is None and online:
+                    cur = current_page_url()
+                    if cur and cur.startswith(ONLINE_URL):
+                        log_message("kiosk ja no app, adotado sem navegar")
+                        STATE["chromium"] = "adopted-noop"
+                        current_state = detected
+                    else:
+                        navigate_or_relaunch(target)
+                        current_state = detected
+                else:
+                    navigate_or_relaunch(target)
+                    current_state = detected
+
+            if get_kiosk_ws() is None:
+                procs = run_out(["pgrep", "-af", "chromium-kiosk"], timeout=5)
+                if not procs:
+                    log_message("chromium ausente no loop, relancando")
+                    ensure_chromium(ONLINE_URL if online else OFFLINE_URL)
+        except Exception as outer_e:
+            log_message("ERRO loop principal: %s" % outer_e)
+        time.sleep(CHECK_INTERVAL)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,15 @@
+[Unit]
+Description=Nexus Totem Network Monitor v2
+After=network.target lightdm.service
+Wants=network.target
+
+[Service]
+User={{ username }}
+ExecStart=/usr/bin/python3 /home/{{ username }}/monitor_network.py
+Restart=always
+RestartSec=5
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/{{ username }}/.Xauthority
+
+[Install]
+WantedBy=graphical.target

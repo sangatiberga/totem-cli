@@ -1,0 +1,1 @@
+"""Totem CLI configuration templates."""

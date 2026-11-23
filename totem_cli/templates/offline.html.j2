@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#07080a">
+<title>Nexus – Sem conexão</title>
+<style>
+  :root {
+    --bg: #07080a;
+    --fg: #f4f6f8;
+    --muted: #7d858f;
+    --line: rgba(255,255,255,.10);
+    --accent: #9dff00;
+    --warn: #ffb020;
+    --ease: cubic-bezier(.65, 0, .35, 1);
+    color-scheme: dark;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    min-height: 100svh; overflow: hidden;
+    background:
+      radial-gradient(70vmax 50vmax at 50% 30%, rgba(157,255,0,.06), transparent 65%),
+      var(--bg);
+    color: var(--fg);
+    font: 400 16px/1.4 system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+    cursor: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* o conteúdo desliza poucos px de tempos em tempos (proteção contra burn-in) */
+  main {
+    min-height: 100svh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: clamp(20px, 4svh, 40px); padding: 4vmin;
+    transition: transform 3s ease-in-out;
+  }
+
+  /* ---------- logo ---------- */
+  .logo { width: min(68vw, 720px); height: auto; overflow: visible; }
+  .logo .fill   { fill: #fff; }
+  .logo .accent { fill: var(--accent); filter: drop-shadow(0 0 12px rgba(157,255,0,.55)); }
+  .logo .ol     { fill: none; stroke: #fff; stroke-width: 2.5; stroke-linejoin: round;
+                  stroke-dasharray: 1; stroke-dashoffset: 0; opacity: 0; }
+
+  /* Movimento só quando o usuário não pede redução; o fallback é a logo final estática.
+     Ciclo único de 8s em loop: desenha → preenche → mantém → apaga → recomeça. */
+  @media (prefers-reduced-motion: no-preference) {
+    .logo .ol     { animation: draw    8s var(--ease) calc(var(--i) * .12s) infinite both; }
+    .logo .fill   { animation: fill    8s ease infinite both; }
+    .logo .accent { animation: accent  8s ease infinite both; }
+    .dot { animation: beat 1.6s ease-in-out infinite; }
+  }
+  @keyframes draw {
+    0%   { opacity: 1; stroke-dashoffset: 1; }
+    25%  { opacity: 1; stroke-dashoffset: 0; }
+    38%  { opacity: 0; stroke-dashoffset: 0; }
+    100% { opacity: 0; stroke-dashoffset: 0; }
+  }
+  @keyframes fill {
+    0%, 20% { opacity: 0; }
+    35%, 85% { opacity: 1; }
+    95%, 100% { opacity: 0; }
+  }
+  @keyframes accent {
+    0%, 28% { opacity: 0; }
+    40%, 85% { opacity: 1; }
+    95%, 100% { opacity: 0; }
+  }
+  @keyframes beat  { 50% { opacity: .25; } }
+
+  /* ---------- status ---------- */
+  .head { text-align: center; }
+  h1 { font-size: clamp(22px, 3.2vw, 38px); font-weight: 600; letter-spacing: .01em; text-wrap: balance; }
+  .head p { margin-top: 8px; color: var(--muted); font-size: clamp(14px, 1.5vw, 19px); }
+
+  .steps { list-style: none; display: flex; align-items: flex-start; gap: 0; }
+  .steps li {
+    position: relative; display: grid; justify-items: center; gap: 10px;
+    width: clamp(110px, 16vw, 170px); font-size: 14px; color: var(--muted);
+  }
+  .steps li:not(:last-child)::after {
+    content: ""; position: absolute; top: 17px; left: calc(50% + 24px); right: calc(-50% + 24px);
+    height: 2px; background: var(--line);
+  }
+  .steps .ic {
+    width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+    border: 2px solid var(--line); font-size: 16px; font-weight: 700; color: var(--muted);
+  }
+  .steps li[data-s="ok"]   { color: var(--fg); }
+  .steps li[data-s="ok"] .ic   { border-color: var(--accent); color: var(--accent); }
+  .steps li[data-s="fail"] { color: var(--fg); }
+  .steps li[data-s="fail"] .ic { border-color: var(--warn); color: var(--warn); }
+  .steps li[data-s="ok"]:not(:last-child)::after { background: var(--accent); }
+
+  dl { display: flex; gap: clamp(20px, 5vw, 56px); }
+  dl > div { text-align: center; }
+  dt { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  dd { margin-top: 4px; font-size: 18px; font-variant-numeric: tabular-nums; }
+
+  .actions { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  button {
+    font: inherit; font-size: 18px; font-weight: 600; cursor: none;
+    padding: 15px 36px; border-radius: 999px; background: transparent;
+    color: var(--accent); border: 1px solid var(--accent);
+    transition: background .15s, color .15s, transform .1s;
+  }
+  button:active { background: var(--accent); color: #000; transform: scale(.97); }
+  button:focus-visible { outline: 3px solid var(--fg); outline-offset: 3px; }
+  button[disabled] { opacity: .45; }
+  #msg { min-height: 22px; font-size: 15px; color: var(--muted); }
+
+  footer { position: fixed; inset: auto 0 10px 0; display: flex; justify-content: center; align-items: center; gap: 10px;
+           font-size: 12px; letter-spacing: .06em; color: #4a5059; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+  #hold { position: relative; padding: 12px 16px; overflow: hidden; }
+  #hold::after { content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 0; background: var(--warn); }
+  #hold.holding::after { width: 100%; transition: width 4s linear; }
+
+  @media (max-width: 720px) {
+    dl { flex-wrap: wrap; justify-content: center; }
+  }
+</style>
+</head>
+<body>
+<main id="page">
+
+  <svg class="logo" viewBox="0 0 1189 311" role="img" aria-label="Nexus" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <!-- pathLength="1" normaliza o traço: dasharray 1 / dashoffset 1→0 desenha qualquer caminho -->
+      <path id="p6" pathLength="1" d="M209.59 0H163.6V188.36L0 0V69.37V69.86V116.73L45.99 169.21V122.74L209.59 310.85V0Z"/>
+      <path id="p1" pathLength="1" d="M282.129 45.9902V-0.00976562H462.999V45.9902H282.129ZM282.129 178.19V132.18H462.999V178.18L282.129 178.19ZM462.999 264.86V310.86H282.129V264.86H462.999Z"/>
+      <path id="p2" pathLength="1" d="M508.512 0H561.132L623.032 109.22L684.932 0H737.552L649.562 155.64L737.552 310.85H684.932L508.512 0Z"/>
+      <path id="p4" pathLength="1" d="M825.541 78.26V200.74C825.541 235.68 854.721 264.86 889.651 264.86C919.721 264.86 944.921 245.4 952.441 216.22L979.851 263.97C957.741 295.37 927.681 310.85 889.651 310.85C875.182 310.884 860.849 308.06 847.475 302.538C834.101 297.017 821.949 288.907 811.719 278.675C801.488 268.444 793.38 256.292 787.859 242.917C782.339 229.542 779.516 215.209 779.551 200.74V0L825.541 78.26Z"/>
+      <path id="p5" pathLength="1" d="M1004.17 29.63C1020.09 9.73001 1040.43 0 1065.63 0H1156.72L1129.72 46H1065.6C1047.92 46 1032.88 61 1032.88 78.72L1004.17 29.63ZM1004.17 310.85L1031.17 264.85H1089.54C1106.34 264.85 1120.05 258.22 1131.1 245.39L1155 286.08C1136.43 302.44 1115.2 310.4 1090.88 310.85H1004.17ZM1051.92 111.43H1089.51C1102.59 111.374 1115.55 113.91 1127.65 118.889C1139.74 123.869 1150.73 131.194 1159.98 140.443C1169.23 149.691 1176.56 160.68 1181.54 172.774C1186.52 184.869 1189.06 197.83 1189 210.91H1143.45C1143.45 180.85 1119.58 157.41 1089.51 157.41H1078.9L1051.92 111.43Z"/>
+
+      <g id="mark">
+        <use href="#p6"/><use href="#p1"/><use href="#p2"/><use href="#p4"/><use href="#p5"/>
+      </g>
+    </defs>
+
+    <!-- contorno que se desenha (uma letra após a outra) -->
+    <use class="ol" style="--i:0" href="#p6"/>
+    <use class="ol" style="--i:1" href="#p1"/>
+    <use class="ol" style="--i:2" href="#p2"/>
+    <use class="ol" style="--i:3" href="#p4"/>
+    <use class="ol" style="--i:4" href="#p5"/>
+
+    <use class="fill" href="#mark"/>
+    <path class="accent" d="M508.512 310.85L570.412 202.07L596.502 248.5L561.132 310.85H508.512Z"/>
+  </svg>
+
+  <div class="head" aria-live="polite">
+    <h1 id="title">Sem conexão com o servidor</h1>
+    <p id="sub">Reconectando automaticamente…</p>
+  </div>
+
+  <ol class="steps" aria-label="Diagnóstico de conexão">
+    <li id="s-wifi"   data-s="pending"><span class="ic">·</span>Wi-Fi</li>
+    <li id="s-net"    data-s="pending"><span class="ic">·</span>Rede (IP)</li>
+    <li id="s-server" data-s="pending"><span class="ic">·</span>Servidor</li>
+  </ol>
+
+  <dl>
+    <div><dt>Rede</dt><dd id="ssid">–</dd></div>
+    <div><dt>IP</dt><dd id="ip">–</dd></div>
+    <div><dt>Offline há</dt><dd id="since">–</dd></div>
+  </dl>
+
+  <div class="actions">
+    <button id="retry" type="button">Tentar novamente</button>
+    <div id="msg" role="status"></div>
+  </div>
+</main>
+
+<footer>
+  <span class="dot"></span>
+  <span id="hold" title="Segure 4s para reiniciar"><span id="ver">NEXUS</span></span>
+</footer>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const ICON = { ok: "✓", fail: "✕", pending: "·" };
+  let offlineSince = Date.now();
+
+  const setStep = (id, s) => { const el = $(id); el.dataset.s = s; el.firstElementChild.textContent = ICON[s]; };
+  const fmt = (sec) => {
+    const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+    return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}min` : `${m}min ${String(s).padStart(2, "0")}s`;
+  };
+
+  function render(d) {
+    const hasIp = d.ip && d.ip !== "-" && d.ip !== "?";
+    $("ssid").textContent = d.ssid && d.ssid !== "-" ? d.ssid : "desconectado";
+    $("ip").textContent = hasIp ? d.ip : "sem IP";
+    if (d.offline_since) offlineSince = new Date(d.offline_since.replace(" ", "T")).getTime();
+    if (d.layer === "wifi") {
+      setStep("s-wifi", "fail"); setStep("s-net", "pending"); setStep("s-server", "pending");
+      $("title").textContent = "Sem conexão Wi-Fi";
+    } else if (d.layer === "server") {
+      setStep("s-wifi", "ok"); setStep("s-net", hasIp ? "ok" : "pending"); setStep("s-server", "fail");
+      $("title").textContent = "Servidor indisponível";
+    } else {
+      setStep("s-wifi", "pending"); setStep("s-net", "pending"); setStep("s-server", "pending");
+      $("title").textContent = "Sem conexão com o servidor";
+    }
+    if (d.version) $("ver").textContent = "NEXUS MONITOR v" + d.version;
+  }
+
+  // setTimeout recursivo: nunca sobrepõe requisições
+  async function poll() {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 3000);
+    try {
+      const r = await fetch("/api/status", { cache: "no-store", signal: ctl.signal });
+      render(await r.json());
+    } catch (_) {
+      $("sub").textContent = "Monitor local não respondeu. Tentando novamente…";
+    } finally {
+      clearTimeout(t);
+      setTimeout(poll, 3000);
+    }
+  }
+  setInterval(() => { $("since").textContent = fmt((Date.now() - offlineSince) / 1000); }, 1000);
+  poll();
+
+  $("retry").addEventListener("click", async (e) => {
+    const b = e.currentTarget; b.disabled = true; $("msg").textContent = "Reparando conexão…";
+    try {
+      const r = await fetch("/api/retry", { method: "POST" });
+      const d = await r.json();
+      $("msg").textContent = `Tentativa executada (${d.repair})`;
+    } catch (_) {
+      $("msg").textContent = "Não foi possível executar a tentativa.";
+    }
+    setTimeout(() => { b.disabled = false; $("msg").textContent = ""; }, 6000);
+  });
+
+  // reinício manual: segurar o rodapé por 4s
+  const hold = $("hold"); let ht = null;
+  const start = () => {
+    hold.classList.add("holding");
+    ht = setTimeout(() => {
+      $("msg").textContent = "Reiniciando o totem…";
+      fetch("/api/reboot", { method: "POST", headers: { "Content-Type": "application/json" },
+                             body: JSON.stringify({ confirm: true }) }).catch(() => {});
+    }, 4000);
+  };
+  const stop = () => { clearTimeout(ht); hold.classList.remove("holding"); };
+  hold.addEventListener("pointerdown", start);
+  ["pointerup", "pointercancel", "pointerleave"].forEach((ev) => hold.addEventListener(ev, stop));
+
+  // anti burn-in: desloca o conteúdo alguns px a cada minuto
+  const page = $("page");
+  setInterval(() => {
+    const r = () => Math.round((Math.random() * 2 - 1) * 12);
+    page.style.transform = `translate(${r()}px, ${r()}px)`;
+  }, 60000);
+})();
+</script>
+</body>
+</html>

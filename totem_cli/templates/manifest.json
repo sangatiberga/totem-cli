@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Nexus Kiosk Injector",
+  "version": "1.0",
+  "incognito": "spanning",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

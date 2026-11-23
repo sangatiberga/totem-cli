@@ -1,0 +1,226 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+FLAG=/etc/totem-provisioned
+LOG=/var/log/totem-firstboot.log
+# Show provisioning progress on the console as well as in the log file, so
+# the operator sees the Totem being configured instead of a bare login prompt.
+exec > >(tee -a "$LOG" /dev/console) 2>&1
+trap 'status=$?; echo "$(date -Is) FALHA na linha ${LINENO} (código ${status})"; exit "$status"' ERR
+
+USERNAME='{{ username }}'
+HOSTNAME_VAL='{{ hostname }}'
+PASSWORD_HASH='{{ password_hash }}'
+WIFI_SSID_B64='{{ wifi_ssid_b64 }}'
+WIFI_PASSWORD_B64='{{ wifi_password_b64 }}'
+TIMEZONE='{{ timezone }}'
+PAYLOAD_DIR=/tmp/totem-firstboot-payload
+
+echo "=== TOTEM: configurando este equipamento (não desligue) ==="
+echo "[1/6] Criando usuário e hostname..."
+mkdir -p "$PAYLOAD_DIR"
+base64 -d <<'TOTEM_PAYLOAD' | tar -xzf - -C "$PAYLOAD_DIR"
+{{ payload_b64 }}
+TOTEM_PAYLOAD
+
+# Cria a conta antes de qualquer instalação ou configuração que a utilize.
+if id "$USERNAME" >/dev/null 2>&1; then
+    usermod --password "$PASSWORD_HASH" "$USERNAME"
+elif [ -x /usr/lib/userconf-pi/userconf ]; then
+    /usr/lib/userconf-pi/userconf "$USERNAME" "$PASSWORD_HASH"
+else
+    useradd --create-home --shell /bin/bash "$USERNAME"
+    usermod --password "$PASSWORD_HASH" "$USERNAME"
+fi
+for group in sudo video render input tty; do
+    if getent group "$group" >/dev/null; then
+        usermod -aG "$group" "$USERNAME"
+    fi
+done
+
+hostnamectl set-hostname "$HOSTNAME_VAL"
+localectl set-locale LANG=pt_BR.UTF-8 2>/dev/null || sed -i 's/^LANG=.*/LANG=pt_BR.UTF-8/' /etc/default/locale 2>/dev/null || true
+timedatectl set-timezone "$TIMEZONE" 2>/dev/null || true
+if grep -qE '^127\.0\.1\.1[[:space:]]' /etc/hosts; then
+    sed -i "s/^127\.0\.1\.1[[:space:]].*/127.0.1.1\t${HOSTNAME_VAL}/" /etc/hosts
+else
+    printf '127.0.1.1\t%s\n' "$HOSTNAME_VAL" >> /etc/hosts
+fi
+timedatectl set-timezone "$TIMEZONE"
+
+echo "[2/6] Configurando a rede..."
+# Bookworm uses NetworkManager. Import the Wi-Fi credentials only when supplied.
+if [ -n "$WIFI_SSID_B64" ] && [ -n "$WIFI_PASSWORD_B64" ]; then
+    WIFI_SSID="$(printf '%s' "$WIFI_SSID_B64" | base64 -d)"
+    WIFI_PASSWORD="$(printf '%s' "$WIFI_PASSWORD_B64" | base64 -d)"
+    systemctl start NetworkManager || true
+    for attempt in $(seq 1 30); do
+        if nmcli general status >/dev/null 2>&1; then
+            break
+        fi
+        sleep 2
+    done
+    nmcli radio wifi on || true
+    if nmcli connection show totem-wifi >/dev/null 2>&1; then
+        nmcli connection modify totem-wifi 802-11-wireless.ssid "$WIFI_SSID" \
+            connection.type 802-11-wireless connection.interface-name wlan0 \
+            wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$WIFI_PASSWORD"
+    else
+        nmcli connection add type wifi ifname wlan0 con-name totem-wifi \
+            802-11-wireless.ssid "$WIFI_SSID" \
+            wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$WIFI_PASSWORD" \
+            connection.autoconnect yes
+    fi
+    nmcli connection up totem-wifi || true
+    unset WIFI_PASSWORD WIFI_SSID
+fi
+
+# Wait for Ethernet or Wi-Fi before installing the kiosk packages. On failure,
+# leave the first-boot marker and cmdline hook in place so a later boot retries.
+connected=0
+for attempt in $(seq 1 120); do
+    if getent ahostsv4 deb.debian.org >/dev/null 2>&1; then
+        connected=1
+        break
+    fi
+    sleep 2
+done
+if [ "$connected" -ne 1 ]; then
+    echo "$(date -Is) Sem conectividade; o provisionamento será repetido no próximo boot."
+    exit 1
+fi
+
+# Raspberry Pi 5 boards without an RTC can boot with an image-build timestamp.
+# Debian rejects repository metadata when the clock predates its signed Date.
+echo "[3/6] Sincronizando o relógio..."
+echo "$(date -Is) Aguardando sincronização do relógio via NTP antes do apt"
+timedatectl set-ntp true || true
+systemctl restart systemd-timesyncd || true
+time_synced=0
+for attempt in $(seq 1 90); do
+    if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" = "yes" ]; then
+        time_synced=1
+        break
+    fi
+    sleep 2
+done
+if [ "$time_synced" -ne 1 ]; then
+    echo "$(date -Is) NTP não respondeu; tentando obter horário HTTP para corrigir relógio inicial sem RTC."
+    # Network policies often block UDP/123. Read an HTTP Date header instead;
+    # APT still verifies the repository's signed Release metadata afterward.
+    server_time="$(python3 - <<'PY'
+import email.utils
+import urllib.request
+from datetime import timezone
+request = urllib.request.Request('http://deb.debian.org/debian/', method='HEAD')
+with urllib.request.urlopen(request, timeout=15) as response:
+    value = response.headers.get('Date')
+if not value:
+    raise SystemExit('O servidor não forneceu o cabeçalho Date')
+instant = email.utils.parsedate_to_datetime(value).astimezone(timezone.utc)
+print(instant.strftime('%Y-%m-%d %H:%M:%S UTC'))
+PY
+    )" || true
+    if [ -n "$server_time" ]; then
+        date -u -s "$server_time"
+        timedatectl set-ntp true || true
+        time_synced=1
+    fi
+fi
+if [ "$time_synced" -ne 1 ]; then
+    echo "$(date -Is) NTP e fallback de horário falharam; provisionamento será repetido no próximo boot."
+    timedatectl status || true
+    systemctl status systemd-timesyncd --no-pager || true
+    exit 1
+fi
+echo "$(date -Is) Relógio sincronizado: $(timedatectl show -p NTPSynchronized --value)"
+
+echo "[4/6] Instalando tela, navegador e serviços (pode levar vários minutos)..."
+echo lightdm shared/default-x-display-manager select lightdm | debconf-set-selections
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends \
+    xserver-xorg x11-xserver-utils xinit openbox lightdm \
+    chromium xdotool unclutter \
+    onboard dbus-x11 xbindkeys mpv python3 openssh-server
+unset DEBIAN_FRONTEND
+
+echo "[5/6] Ativando login automático e o modo quiosque..."
+mkdir -p /etc/lightdm/lightdm.conf.d /etc/X11/xorg.conf.d /etc/xdg/openbox
+cat > /etc/lightdm/lightdm.conf.d/01-totem-autologin.conf <<EOF
+[Seat:*]
+autologin-user=${USERNAME}
+autologin-user-timeout=0
+user-session=openbox
+autologin-session=openbox
+xserver-command=X
+EOF
+
+cat > /etc/X11/xorg.conf.d/99-vc4.conf <<'EOF'
+Section "OutputClass"
+    Identifier "vc4"
+    MatchDriver "vc4"
+    Driver "modesetting"
+    Option "PrimaryGPU" "true"
+EndSection
+EOF
+
+cat > "/home/${USERNAME}/.xsession" <<'EOF'
+exec openbox-session
+EOF
+chmod +x "/home/${USERNAME}/.xsession"
+
+install -o "$USERNAME" -g "$USERNAME" -m 644 "$PAYLOAD_DIR/monitor_network.py" "/home/${USERNAME}/monitor_network.py"
+install -o "$USERNAME" -g "$USERNAME" -m 644 "$PAYLOAD_DIR/offline.html" "/home/${USERNAME}/offline.html"
+install -o "$USERNAME" -g "$USERNAME" -m 644 "$PAYLOAD_DIR/xbindkeysrc" "/home/${USERNAME}/.xbindkeysrc"
+if [ -f "$PAYLOAD_DIR/Nexus_Boot_Splashscreen.mp4" ]; then
+    install -o "$USERNAME" -g "$USERNAME" -m 644 "$PAYLOAD_DIR/Nexus_Boot_Splashscreen.mp4" "/home/${USERNAME}/Nexus_Boot_Splashscreen.mp4"
+fi
+
+mkdir -p "/home/${USERNAME}/.config/nexus-extension" "/home/${USERNAME}/.config/chromium-kiosk/Default"
+install -o "$USERNAME" -g "$USERNAME" -m 644 "$PAYLOAD_DIR/nexus_manifest.json" "/home/${USERNAME}/.config/nexus-extension/manifest.json"
+install -o "$USERNAME" -g "$USERNAME" -m 644 "$PAYLOAD_DIR/nexus_content.js" "/home/${USERNAME}/.config/nexus-extension/content.js"
+install -m 644 "$PAYLOAD_DIR/totem_autostart" /etc/xdg/openbox/autostart
+install -m 440 "$PAYLOAD_DIR/totem_sudoers" /etc/sudoers.d/totem-monitor
+chown root:root /etc/sudoers.d/totem-monitor
+
+python3 - <<PYEOF
+import json
+from pathlib import Path
+p = Path("/home/${USERNAME}/.config/chromium-kiosk/Default/Preferences")
+data = {}
+if p.exists() and p.stat().st_size:
+    try:
+        data = json.loads(p.read_text())
+    except Exception:
+        pass
+data.setdefault('translate', {})['enabled'] = False
+data.setdefault('intl', {})['accept_languages'] = 'pt-BR,pt,en-US,en'
+# Desativa oferta de salvar senhas e preenchimento automático (kiosk compartilhado)
+data['credentials_enable_service'] = False
+data.setdefault('profile', {})['password_manager_enabled'] = False
+data.setdefault('autofill', {})['profile_enabled'] = False
+data.setdefault('autofill', {})['credit_card_enabled'] = False
+p.write_text(json.dumps(data, separators=(',', ':')))
+PYEOF
+
+chown -R "$USERNAME:$USERNAME" "/home/${USERNAME}"
+systemctl daemon-reload
+systemctl enable ssh lightdm
+systemctl set-default graphical.target
+if ! grep -q 'dtoverlay=vc4-kms-v3d' /boot/firmware/config.txt; then
+    cat "$PAYLOAD_DIR/config_rpi5.txt" >> /boot/firmware/config.txt
+fi
+python3 - <<'PYEOF'
+from pathlib import Path
+cmdline = Path('/boot/firmware/cmdline.txt')
+tokens = cmdline.read_text().split()
+tokens = [t for t in tokens if t != 'systemd.run=/boot/firmware/firstboot.sh']
+cmdline.write_text(' '.join(tokens) + '\n')
+PYEOF
+rm -f /boot/firmware/firstboot.sh
+rm -rf "$PAYLOAD_DIR"
+touch "$FLAG"
+echo "[6/6] Concluído. Iniciando o Totem..."
+echo "$(date -Is) Provisionamento concluído"
+systemctl restart lightdm

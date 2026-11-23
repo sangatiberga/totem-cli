@@ -1,0 +1,48 @@
+#!/bin/sh
+# Openbox Autostart - Totem Kiosk Production
+# Gerado automaticamente pelo Totem CLI
+
+# --- Variaveis X11 ---
+export DISPLAY=:0
+export XAUTHORITY=/home/{{ username }}/.Xauthority
+
+# --- Energia e tela (suprime protetor de tela e DPMS) ---
+xset s off
+xset s noblank
+xset s noexpose
+xset -dpms
+
+# --- Teclado ABNT2 (setxkbmap em toda sessao). Sem isto, @ vira aspas. ---
+setxkbmap -layout br -variant abnt2 2>/dev/null || setxkbmap -layout br 2>/dev/null || true
+
+# --- Rotacao dinamica para qualquer tela conectada ---
+for OUT in $(xrandr --query | awk '/ connected/{print $1}'); do
+    xrandr --output "$OUT" --rotate {{ screen_rotation | default('left') }}
+done
+
+# --- Bloqueio de atalhos de saida ---
+xbindkeys &
+
+# --- Splashscreen animada em loop cobrindo o boot ---
+mpv \
+    --loop=inf \
+    --vo=gpu-next \
+    --fs \
+    --no-osd-bar \
+    --no-osc \
+    --no-input-default-bindings \
+    "/home/{{ username }}/Nexus_Boot_Splashscreen.mp4" &
+MPV_PID=$!
+
+# --- Monitor de Rede e Execucao do Chromium Kiosk ---
+(
+    python3 "/home/{{ username }}/monitor_network.py" &
+
+    # Aguarda a janela do Chromium estar aberta e visivel antes de fechar a splashscreen
+    while ! xdotool search --onlyvisible --class chromium >/dev/null 2>&1; do
+        sleep 0.2
+    done
+
+    # Finaliza a splashscreen; a tela cai instantaneamente no Nexus pronto!
+    kill $MPV_PID 2>/dev/null || true
+) &
