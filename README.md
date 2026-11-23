@@ -13,35 +13,29 @@ Assistente de terminal para preparar e administrar Totens baseados em Raspberry 
 
 ## Comando `totem`
 
-O comando da ferramenta é `totem`. Os instaladores baixam a wheel da última release do GitHub, verificam o checksum SHA-256 e instalam a CLI com `pipx`; não é necessário clonar o projeto. Requer Python 3.11 ou superior e acesso ao repositório privado `sangatiberga/totem-cli` pelo GitHub CLI (`gh`).
+O comando da ferramenta é `totem`. Os instaladores baixam o binário compilado da última release do GitHub, verificam o checksum SHA-256 e o colocam no PATH; não é necessário Python, `pipx`, Git ou clonar o projeto. Requer apenas um token com leitura do repositório privado `sangatiberga/totem-cli` (fine-grained com Contents Read-only, ou clássico com escopo `repo`). Binários publicados: `totem-linux-amd64` e `totem-windows-amd64.exe` (Linux/Windows 64-bit).
 
-### Linux (Ubuntu/Debian)
+### Linux
 
-Instale Python 3.11 ou superior, `pipx` e GitHub CLI (`gh`). No Ubuntu/Debian:
-
-```bash
-sudo apt update
-sudo apt install pipx gh
-pipx ensurepath
-```
-
-Feche e reabra o terminal, autentique-se com uma conta que tenha acesso ao repositório e execute o instalador:
+Instale com um comando (o token vai no cabeçalho porque o repositório é privado):
 
 ```bash
-gh auth login --hostname github.com
-gh api repos/sangatiberga/totem-cli/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
+export GITHUB_TOKEN='SEU_TOKEN'; curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" https://raw.githubusercontent.com/sangatiberga/totem-cli/main/install.sh | sh
 ```
+
+Alternativa sem one-liner: baixe o `install.sh` pelo navegador (logado no GitHub) e execute `GITHUB_TOKEN='SEU_TOKEN' sh install.sh`.
 
 Depois, inicie a ferramenta com `totem`. Antes de gravar um cartão, a CLI solicitará a senha `sudo` em um campo mascarado.
 
 ### Windows
 
-Instale Python 3.11 ou superior e GitHub CLI (`gh`). No PowerShell, autentique-se com uma conta que tenha acesso ao repositório e execute o instalador:
+No PowerShell, instale com um comando (o token vai no cabeçalho porque o repositório é privado):
 
 ```powershell
-gh auth login --hostname github.com
-gh api repos/sangatiberga/totem-cli/contents/install.ps1 -H "Accept: application/vnd.github.raw" | iex
+$env:GITHUB_TOKEN='SEU_TOKEN'; irm https://raw.githubusercontent.com/sangatiberga/totem-cli/main/install.ps1 -Headers @{Authorization="Bearer $env:GITHUB_TOKEN"} | iex
 ```
+
+Alternativa sem one-liner: baixe o `install.ps1` pelo navegador (logado no GitHub) e execute `powershell -ExecutionPolicy Bypass -File install.ps1` com `$env:GITHUB_TOKEN` definido.
 
 O instalador instala `pipx` se necessário. Feche e reabra o PowerShell e inicie a ferramenta:
 
@@ -51,7 +45,7 @@ totem
 
 Para gravar um cartão, abra o PowerShell como Administrador e execute `totem`.
 
-O instalador obtém a versão mais recente publicada. Ao publicar uma tag `v*`, o workflow de release anexa os arquivos `.whl`, `.tar.gz` e `checksums.txt` à release do GitHub.
+O instalador obtém a versão mais recente publicada. Ao publicar uma tag `v*`, o workflow de release anexa os binários `totem-linux-amd64` e `totem-windows-amd64.exe`, além de `.whl`, `.tar.gz` e `checksums.txt`, à release do GitHub.
 
 Para desenvolvimento, clone o repositório e instale em modo editável com `pipx install --editable .`.
 

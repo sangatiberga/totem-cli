@@ -20,6 +20,7 @@ from textual.widgets import (
     Static,
 )
 
+from totem_cli.resources import package_dir
 from totem_cli.core.disk import DiskDrive, get_removable_disks
 from totem_cli.core.imager import (
     ImagerError,
@@ -55,7 +56,7 @@ def _validate_nexus_url(value: str) -> str:
     return (value or "").strip()
 
 
-TOTEM_ASCII = (Path(__file__).parent / "assets" / "ascii-art.txt").read_text(encoding="utf-8").rstrip("\n")
+TOTEM_ASCII = (package_dir() / "assets" / "ascii-art.txt").read_text(encoding="utf-8").rstrip("\n")
 
 
 class BaseScreen(Screen[None]):

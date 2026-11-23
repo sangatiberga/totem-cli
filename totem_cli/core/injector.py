@@ -14,8 +14,10 @@ from urllib.parse import urlparse
 import jinja2
 from passlib.hash import sha512_crypt
 
-TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
-ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+from totem_cli.resources import package_dir
+
+TEMPLATES_DIR = package_dir() / "templates"
+ASSETS_DIR = package_dir() / "assets"
 
 
 @dataclass
