@@ -38,11 +38,12 @@ try {
     Invoke-WebRequest -Uri $Binary.browser_download_url -OutFile $DownloadPath
     Invoke-WebRequest -Uri $Checksums.browser_download_url -OutFile $ChecksumsPath
 
-    $ChecksumLine = Get-Content $ChecksumsPath | Where-Object { $_ -match ("\s+" + [regex]::Escape($AssetName) + '$') } | Select-Object -First 1
-    if (-not $ChecksumLine) { throw "Checksum de $AssetName não encontrado." }
-    $ExpectedHash = ($ChecksumLine -split '\s+')[0].ToLowerInvariant()
+    $ExpectedHashes = @(Get-Content $ChecksumsPath |
+        Where-Object { $_ -match ("\s+" + [regex]::Escape($AssetName) + '$') } |
+        ForEach-Object { ($_ -split '\s+')[0].ToLowerInvariant() })
+    if (-not $ExpectedHashes) { throw "Checksum de $AssetName não encontrado." }
     $ActualHash = (Get-FileHash -Algorithm SHA256 -Path $DownloadPath).Hash.ToLowerInvariant()
-    if ($ExpectedHash -ne $ActualHash) { throw 'O checksum SHA-256 do binário não confere.' }
+    if ($ActualHash -notin $ExpectedHashes) { throw 'O checksum SHA-256 do binário não confere.' }
 
     $Destination = Join-Path $InstallDirectory 'totem.exe'
     Copy-Item -Path $DownloadPath -Destination $Destination -Force

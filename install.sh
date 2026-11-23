@@ -65,13 +65,13 @@ echo "Baixando ${BIN_NAME} da última release..."
 curl -fsSL -o "${TMP_DIR}/${BIN_NAME}" "$BIN_URL"
 curl -fsSL -o "${TMP_DIR}/checksums.txt" "$CHECKSUMS_URL"
 
-EXPECTED_SHA="$(awk -v name="$BIN_NAME" '$2 == name { print $1 }' "${TMP_DIR}/checksums.txt")"
-if [ -z "$EXPECTED_SHA" ]; then
+EXPECTED_SHAS="$(awk -v name="$BIN_NAME" '$2 == name { print $1 }' "${TMP_DIR}/checksums.txt")"
+if [ -z "$EXPECTED_SHAS" ]; then
     echo "Erro: checksum de ${BIN_NAME} não encontrado." >&2
     exit 1
 fi
 ACTUAL_SHA="$(sha256sum "${TMP_DIR}/${BIN_NAME}" | awk '{ print $1 }')"
-if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+if ! printf '%s\n' "$EXPECTED_SHAS" | grep -qx "$ACTUAL_SHA"; then
     echo "Erro: o checksum SHA-256 do binário não confere." >&2
     exit 1
 fi
