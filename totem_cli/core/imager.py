@@ -694,6 +694,22 @@ def build_flash_command(executable: str, image_uri: str, target_device: str,
     return args
 
 
+def imager_log_paths(stamp: Optional[str] = None) -> tuple[str, str]:
+    """Per-run Imager log locations inside the system temp dir.
+
+    A timestamped stem keeps every flash attempt in its own files, so the
+    failure panel never shows tails mixed from older runs.
+    """
+    from datetime import datetime as _datetime
+
+    tag = stamp or _datetime.now().strftime("%Y%m%d-%H%M%S")
+    temp_dir = Path(tempfile.gettempdir())
+    return (
+        str(temp_dir / f"totem-imager-{tag}.log"),
+        str(temp_dir / f"totem-imager-console-{tag}.log"),
+    )
+
+
 def read_imager_log_tail(log_file: str, max_chars: int = 900) -> str:
     """Last lines of the Imager --log-file, for surfacing real failures.
 

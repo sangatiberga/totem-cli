@@ -313,6 +313,16 @@ class TestCheckDeviceWritable(unittest.TestCase):
             imager.check_device_writable("")
 
 
+
+    def test_imager_log_paths_are_stamped_per_run(self):
+        log, console = imager.imager_log_paths(stamp="20240101-120000")
+        self.assertTrue(log.endswith("totem-imager-20240101-120000.log"))
+        self.assertTrue(console.endswith("totem-imager-console-20240101-120000.log"))
+        auto_log, auto_console = imager.imager_log_paths()
+        self.assertIn("totem-imager-", auto_log)
+        self.assertIn("totem-imager-console-", auto_console)
+
+
 class TestFlashFailureDetail(unittest.TestCase):
     def test_empty_outputs_still_identify_command_and_script(self):
         detail = imager.describe_flash_failure(
