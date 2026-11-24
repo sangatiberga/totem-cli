@@ -20,6 +20,7 @@ from textual.widgets import (
     Static,
 )
 
+from totem_cli import __version__
 from totem_cli.resources import package_dir
 from totem_cli.core.disk import DiskDrive, get_removable_disks
 from totem_cli.core.imager import (
@@ -73,6 +74,7 @@ class BaseScreen(Screen[None]):
                     yield Static("Raspberry Pi 5\nOpenbox → Chromium kiosk\nRaspberry Pi OS Bookworm · 64-bit", classes="side-note")
                     yield Static("●  PROVISIONAMENTO ATIVO\nAmbiente Industrial", classes="status-card")
                     yield Static("", id="flow-context", classes="side-note")
+                    yield Static(f"CLI v{__version__}", id="app-version")
                 with Vertical(id="right"):
                     with VerticalScroll(id="content"):
                         yield Static(id="page-title", classes="page-title")
@@ -978,6 +980,7 @@ class TotemApp(App[None]):
     .kicker { color: $accent; text-style: bold; margin: 1 0 1 0; }
     #flow-steps { color: $ink; margin-bottom: 1; }
     #flow-context { margin-top: 1; }
+    #app-version { color: $accent; text-style: bold; margin-top: 1; }
     .fieldset { height: auto; border: round $line; background: $panel-2; padding: 1 2; margin-bottom: 1; }
     .fieldset-title { color: $accent; text-style: bold; }
     .field-hint { color: $muted; margin-bottom: 1; }
