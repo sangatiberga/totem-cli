@@ -946,6 +946,10 @@ class ProgressFlashScreen(BaseScreen):
             if output_buffer.strip():
                 last_output = output_buffer.strip()
             return_code = await process.wait()
+            # The Imager writes directly to the Windows console (CONOUT$),
+            # bypassing our pipes, so repaint everything once it exits to
+            # clear any residue it left mid-screen.
+            self.refresh(layout=True)
             if return_code != 0:
                 log_tail = await asyncio.to_thread(wait_imager_log_tail, str(log_path))
                 console_tail = await asyncio.to_thread(read_imager_log_tail, str(console_log_path))

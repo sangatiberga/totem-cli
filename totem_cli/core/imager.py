@@ -676,7 +676,12 @@ def build_flash_command(executable: str, image_uri: str, target_device: str,
             "A gravação no Windows exige terminal com elevação real de Administrador "
             "(UAC): pertencer ao grupo Administradores sem elevar não basta."
         )
-    args = [executable, "--cli", "--debug"]
+    # Never pass --debug here: on Windows the Imager is a GUI-subsystem binary
+    # that reopens CONOUT$ (attachConsole), so every console line bypasses our
+    # pipes and lands straight in the live terminal. With --debug that includes
+    # a hundreds-of-KB dump of the first-run script, which destroys the TUI.
+    # The --log-file below already records everything the panel needs.
+    args = [executable, "--cli"]
     if platform.system().lower() == "linux" and not is_elevated():
         args = ["sudo", "-n", *args]
     if expected_sha256:

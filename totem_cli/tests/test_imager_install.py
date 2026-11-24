@@ -195,13 +195,16 @@ class TestEnsureImagerWindows(unittest.TestCase):
             with self.assertRaises(imager.ImagerError):
                 imager._require_first_run_support("C:\\old\\rpi-imager.exe")
 
-    def test_flash_command_includes_debug_flag(self):
+    def test_flash_command_avoids_console_dump(self):
+        # --debug would make the Imager dump hundreds of KB straight into the
+        # live Windows terminal (CONOUT$), wrecking the TUI; the --log-file
+        # already records everything the failure panel needs.
         with patch.object(imager, "is_elevated", return_value=True):
             command = imager.build_flash_command(
                 "rpi-imager", "https://example.com/img.xz", "dest",
                 None, None, None,
             )
-        self.assertIn("--debug", command)
+        self.assertNotIn("--debug", command)
 
     def test_windows_flash_gate_requires_real_elevation(self):
         args = ("rpi-imager.exe", "https://example.com/img.xz", "dest", None, None, None)
@@ -212,7 +215,7 @@ class TestEnsureImagerWindows(unittest.TestCase):
         with patch("os.name", "nt"), \
                 patch.object(imager, "is_process_elevated", return_value=True):
             command = imager.build_flash_command(*args)
-        self.assertIn("--debug", command)
+        self.assertEqual(command[-2:], ["https://example.com/img.xz", "dest"])
 
     def test_strict_elevation_matches_euid_off_windows(self):
         import os as _os
