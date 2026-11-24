@@ -172,6 +172,52 @@ def is_elevated() -> bool:
     return hasattr(os, "geteuid") and os.geteuid() == 0
 
 
+def check_device_writable(device: str) -> None:
+    """Fail fast when the card refuses writes, before invoking the Imager.
+
+    The Imager reports a raw write denial only as exit code 1 buried in its
+    log. Probing the device first turns the common cases into a clear
+    message: a card that answers "access denied" is usually behind the
+    physical Lock switch of the SD adapter or a software read-only flag,
+    while "sharing violation" means another program is holding the drive.
+    Anything unexpected (or any probe failure) lets the flash proceed so the
+    Imager itself remains the final reporter. Windows only.
+    """
+    if os.name != "nt" or not device:
+        return
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateFileW.restype = ctypes.c_void_p
+        handle = kernel32.CreateFileW(
+            device,
+            0x80000000 | 0x40000000,  # GENERIC_READ | GENERIC_WRITE
+            0,  # no sharing: also detects drives held by other programs
+            None,
+            3,  # OPEN_EXISTING
+            0,
+            None,
+        )
+        invalid = ctypes.c_void_p(-1).value
+        if handle != invalid:
+            kernel32.CloseHandle(handle)
+            return
+        error = kernel32.GetLastError()
+    except Exception:
+        return
+    if error == 5:  # ERROR_ACCESS_DENIED
+        raise ImagerError(
+            "O cartão recusou a escrita (acesso negado). Verifique a trava "
+            "física Lock do adaptador SD e a flag somente-leitura "
+            "(diskpart > attributes disk). Nenhum dado foi escrito."
+        )
+    if error == 32:  # ERROR_SHARING_VIOLATION
+        raise ImagerError(
+            "Outro programa está usando o cartão. Feche o Explorer e o "
+            "antivírus, reinsira o leitor e tente de novo. "
+            "Nenhum dado foi escrito."
+        )
+
+
 def is_process_elevated() -> bool:
     """True only when the process token is actually elevated (UAC-aware).
 

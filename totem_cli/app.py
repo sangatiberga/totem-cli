@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 from textual.app import App, ComposeResult
@@ -27,6 +28,7 @@ from totem_cli.core.imager import (
     ImagerError,
     authorize_sudo,
     build_flash_command,
+    check_device_writable,
     ensure_imager,
     is_elevated,
     describe_flash_failure,
@@ -731,6 +733,27 @@ class ProfileScreen(BaseScreen):
         )
 
 
+FLASH_UI_REFRESH_INTERVAL = 0.4
+
+
+def flash_ui_refresh_due(now: float, last_update: float, percent: Optional[int],
+                         last_percent: int, verifying: bool,
+                         was_verifying: bool) -> bool:
+    """Decide whether a streamed Imager line deserves a screen repaint.
+
+    The Imager emits hundreds of progress lines per second while downloading
+    and writing; repainting the detail panel on every one thrashes layout and
+    breaks the terminal UI on Windows. Repaint at most every
+    FLASH_UI_REFRESH_INTERVAL seconds, immediately on write/verify phase
+    switches, and on 0%/100% milestones.
+    """
+    if verifying != was_verifying:
+        return True
+    if percent is not None and percent != last_percent and percent in (0, 100):
+        return True
+    return (now - last_update) >= FLASH_UI_REFRESH_INTERVAL
+
+
 class ProgressFlashScreen(BaseScreen):
     def __init__(self, target_disk: str, config: TotemConfig, image_source: str,
                  variant: str = "", target_model: str = "", target_size: int = 0,
@@ -858,6 +881,8 @@ class ProgressFlashScreen(BaseScreen):
             confirmed = next((item for item in fresh_disks if item.device == self.target_disk), None)
             if confirmed is None or confirmed.size_bytes != disk.size_bytes or confirmed.model != disk.model:
                 raise ImagerError("A unidade selecionada mudou durante a preparação. Nenhum dado foi escrito.")
+            phase(3, "Conferindo se o cartão aceita escrita…", 24)
+            await asyncio.to_thread(check_device_writable, self.target_disk)
             if os.name != "nt":
                 phase(3, "Desmontando as partições do cartão…", 25)
                 await asyncio.to_thread(unmount_device_partitions, self.target_disk)
@@ -880,6 +905,9 @@ class ProgressFlashScreen(BaseScreen):
             )
             last_output = ""
             output_buffer = ""
+            last_ui_update = 0.0
+            last_percent_shown = -1
+            was_verifying = False
             assert process.stdout is not None
             with console_log_path.open("wb") as console_log:
                 console_log.write(b"Saida capturada do Raspberry Pi Imager:\n")
@@ -896,11 +924,22 @@ class ProgressFlashScreen(BaseScreen):
                         last_output = line.strip()
                         if not last_output:
                             continue
-                        self.query_one("#flash-detail", Static).update(last_output[-400:])
+                        percent: Optional[int] = None
                         percent_match = re.search(r"(\d{1,3})\s*%", last_output)
                         if percent_match:
                             percent = min(100, int(percent_match.group(1)))
-                            if "verif" in last_output.lower():
+                        verifying = "verif" in last_output.lower()
+                        now = time.monotonic()
+                        if not flash_ui_refresh_due(now, last_ui_update, percent,
+                                                    last_percent_shown, verifying,
+                                                    was_verifying):
+                            continue
+                        last_ui_update = now
+                        last_percent_shown = percent if percent is not None else last_percent_shown
+                        was_verifying = verifying
+                        self.query_one("#flash-detail", Static).update(last_output[-400:])
+                        if percent is not None:
+                            if verifying:
                                 self._set_phase(4, last_output[-400:], 70 + int(percent * 0.25))
                             else:
                                 self._set_phase(3, last_output[-400:], 25 + int(percent * 0.45))

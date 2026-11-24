@@ -259,6 +259,57 @@ class TestEnsureImagerWindows(unittest.TestCase):
             mock_urlopen.assert_not_called()
 
 
+
+class TestCheckDeviceWritable(unittest.TestCase):
+    INVALID = __import__("ctypes").c_void_p(-1).value
+
+    def _windll(self, handle, error=0):
+        from unittest.mock import MagicMock as _MagicMock
+        fake = _MagicMock()
+        fake.kernel32.CreateFileW.return_value = handle
+        fake.kernel32.GetLastError.return_value = error
+        return fake
+
+    def test_writable_drive_closes_handle_and_proceeds(self):
+        fake = self._windll(1234)
+        with patch("os.name", "nt"), \
+                patch.object(imager.ctypes, "windll", fake, create=True):
+            imager.check_device_writable("X:")
+        fake.kernel32.CloseHandle.assert_called_once_with(1234)
+
+    def test_access_denied_reports_write_protection(self):
+        fake = self._windll(self.INVALID, error=5)
+        with patch("os.name", "nt"), \
+                patch.object(imager.ctypes, "windll", fake, create=True):
+            with self.assertRaises(imager.ImagerError) as ctx:
+                imager.check_device_writable("X:")
+        self.assertIn("acesso negado", str(ctx.exception))
+
+    def test_sharing_violation_reports_drive_in_use(self):
+        fake = self._windll(self.INVALID, error=32)
+        with patch("os.name", "nt"), \
+                patch.object(imager.ctypes, "windll", fake, create=True):
+            with self.assertRaises(imager.ImagerError) as ctx:
+                imager.check_device_writable("X:")
+        self.assertIn("Outro programa", str(ctx.exception))
+
+    def test_unknown_error_and_probe_failure_let_flash_proceed(self):
+        fake = self._windll(self.INVALID, error=2)
+        with patch("os.name", "nt"), \
+                patch.object(imager.ctypes, "windll", fake, create=True):
+            imager.check_device_writable("X:")
+        broken = self._windll(self.INVALID, error=5)
+        broken.kernel32.CreateFileW.side_effect = OSError("no windll")
+        with patch("os.name", "nt"), \
+                patch.object(imager.ctypes, "windll", broken, create=True):
+            imager.check_device_writable("X:")
+
+    def test_noop_off_windows(self):
+        with patch("os.name", "posix"):
+            imager.check_device_writable("/dev/sda")
+            imager.check_device_writable("")
+
+
 class TestFlashFailureDetail(unittest.TestCase):
     def test_empty_outputs_still_identify_command_and_script(self):
         detail = imager.describe_flash_failure(
