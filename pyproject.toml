@@ -1,6 +1,6 @@
 [project]
 name = "totem-cli"
-version = "0.1.14"
+version = "0.1.15"
 description = "Assistente de terminal para preparar e administrar Totens Raspberry Pi 5"
 readme = "README.md"
 requires-python = ">=3.11"

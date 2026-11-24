@@ -17,6 +17,7 @@ from textual.widgets import (
     Input,
     Label,
     ProgressBar,
+    RichLog,
     Select,
     Static,
 )
@@ -29,6 +30,7 @@ from totem_cli.core.imager import (
     authorize_sudo,
     build_flash_command,
     check_device_writable,
+    imager_log_paths,
     ensure_imager,
     is_elevated,
     describe_flash_failure,
@@ -792,6 +794,16 @@ class ProgressFlashScreen(BaseScreen):
             Label("ETAPAS", classes="section-label"),
             Static("", id="provisioning-log"),
         )
+        # Third column: the Imager log streams here instead of flooding the
+        # status panel, so the layout no longer breaks while writing.
+        await self.query_one("#main-layout", Horizontal).mount(
+            Vertical(
+                Label("LOG DA GRAVAÇÃO", classes="section-label"),
+                RichLog(id="flash-log-view", highlight=False, markup=False,
+                        wrap=True, max_lines=500),
+                id="flash-log-panel",
+            )
+        )
         self.query_one("#actions", Horizontal).mount(
             Button("Aguarde…", id="done-flash", variant="primary", disabled=True),
         )
@@ -890,8 +902,9 @@ class ProgressFlashScreen(BaseScreen):
                 await asyncio.to_thread(wipe_device_signatures, self.target_disk)
             # Keep the Imager log outside the temp dir so the operator can
             # send it for diagnosis even after this screen closes.
-            log_path = Path(tempfile.gettempdir()) / "totem-imager.log"
-            console_log_path = Path(tempfile.gettempdir()) / "totem-imager-console.log"
+            log_name, console_name = imager_log_paths()
+            log_path = Path(log_name)
+            console_log_path = Path(console_name)
             command = build_flash_command(
                 executable, image_uri, self.target_disk, expected_hash, str(script_path),
                 str(log_path),
@@ -905,6 +918,8 @@ class ProgressFlashScreen(BaseScreen):
             )
             last_output = ""
             output_buffer = ""
+            pending_log_lines: list[str] = []
+            log_view = self.query_one("#flash-log-view", RichLog)
             last_ui_update = 0.0
             last_percent_shown = -1
             was_verifying = False
@@ -924,6 +939,7 @@ class ProgressFlashScreen(BaseScreen):
                         last_output = line.strip()
                         if not last_output:
                             continue
+                        pending_log_lines.append(last_output)
                         percent: Optional[int] = None
                         percent_match = re.search(r"(\d{1,3})\s*%", last_output)
                         if percent_match:
@@ -938,11 +954,17 @@ class ProgressFlashScreen(BaseScreen):
                         last_percent_shown = percent if percent is not None else last_percent_shown
                         was_verifying = verifying
                         self.query_one("#flash-detail", Static).update(last_output[-400:])
+                        for buffered in pending_log_lines:
+                            log_view.write(buffered[-400:])
+                        pending_log_lines.clear()
                         if percent is not None:
                             if verifying:
                                 self._set_phase(4, last_output[-400:], 70 + int(percent * 0.25))
                             else:
                                 self._set_phase(3, last_output[-400:], 25 + int(percent * 0.45))
+            for buffered in pending_log_lines:
+                log_view.write(buffered[-400:])
+            pending_log_lines.clear()
             if output_buffer.strip():
                 last_output = output_buffer.strip()
             return_code = await process.wait()
@@ -1015,7 +1037,12 @@ class TotemApp(App[None]):
 
     #frame { height: 1fr; padding: 1 2; }
     #main-layout { height: 1fr; }
-    #right { height: 1fr; }
+    #right { height: 1fr; width: 2fr; }
+    #flash-log-panel {
+        width: 1fr; height: 1fr; margin-left: 2; padding: 1 2;
+        background: $panel; border: round $line;
+    }
+    #flash-log-view { height: 1fr; color: $muted; }
 
     /* Left rail: where am I, what device is this. */
     #sidebar {
