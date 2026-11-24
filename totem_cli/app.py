@@ -744,7 +744,7 @@ class ProgressFlashScreen(BaseScreen):
         self.operation_finished = False
         self.succeeded = False
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self.set_steps(["Origem e destino", "Totem e rede", "Gravação"], 2)
         self.set_context([f"Destino: {self.target_disk}"])
         self.query_one("#page-title", Static).update("Preparando o cartão SD")
@@ -753,14 +753,17 @@ class ProgressFlashScreen(BaseScreen):
         )
 
         area = self.query_one("#form-area", Vertical)
-        area.mount(
+        await area.mount(
             Static("Preparando…", id="flash-phase"),
             Horizontal(
                 ProgressBar(total=100, show_percentage=False, show_eta=False, id="flash-progress"),
                 Static("0%", id="flash-percent"),
                 id="flash-progress-row",
             ),
-            Static("Iniciando…", id="flash-detail"),
+            VerticalScroll(
+                Static("Iniciando…", id="flash-detail"),
+                id="flash-detail-wrap",
+            ),
             Label("ETAPAS", classes="section-label"),
             Static("", id="provisioning-log"),
         )
@@ -938,6 +941,7 @@ class ProgressFlashScreen(BaseScreen):
         except Exception as exc:
             self.query_one("#flash-phase", Static).update("Não foi possível concluir")
             self.query_one("#flash-detail", Static).update(f"Falha: {exc}")
+            self.query_one("#flash-detail-wrap", VerticalScroll).styles.height = 24
             done_button.label = "Voltar"
         finally:
             self.operation_finished = True
@@ -1033,10 +1037,11 @@ class TotemApp(App[None]):
 
     /* Flash progress: full-width bar, big percentage, phase checklist. */
     #flash-phase { color: $ink; text-style: bold; height: 2; }
-    #flash-detail {
-        color: $muted; height: 3; margin: 1 0; padding: 0 1;
+    #flash-detail-wrap {
+        height: 3; margin: 1 0; padding: 0 1;
         background: $panel-2; border: round $line;
     }
+    #flash-detail { color: $muted; height: auto; }
     #flash-progress-row { height: 1; margin: 1 0; align: left middle; }
     #flash-progress { width: 1fr; height: 1; }
     #flash-progress Bar > .bar--bar { background: $accent; color: $accent; }
