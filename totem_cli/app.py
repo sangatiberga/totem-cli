@@ -847,87 +847,89 @@ class ProgressFlashScreen(BaseScreen):
 
             phase(2, "Gerando hostname, usuário, rede e o script de primeiro boot…", 22)
             first_run_script = await asyncio.to_thread(build_first_run_script, self.config)
-            with tempfile.TemporaryDirectory(prefix="totem-first-run-") as temp_dir:
-                script_path = Path(temp_dir) / "totem-first-run.sh"
-                script_path.write_text(first_run_script, encoding="utf-8", newline="\n")
+            # Stable path on purpose: the failure panel prints this exact
+            # command, and the operator can re-run it by hand to isolate
+            # CLI vs Imager issues. The temp dir used to vanish on exit.
+            script_path = Path(tempfile.gettempdir()) / "totem-first-run.sh"
+            script_path.write_text(first_run_script, encoding="utf-8", newline="\n")
 
-                # Revalidate the selected card as close as possible to the write.
-                fresh_disks = await asyncio.to_thread(get_removable_disks)
-                confirmed = next((item for item in fresh_disks if item.device == self.target_disk), None)
-                if confirmed is None or confirmed.size_bytes != disk.size_bytes or confirmed.model != disk.model:
-                    raise ImagerError("A unidade selecionada mudou durante a preparação. Nenhum dado foi escrito.")
-                if os.name != "nt":
-                    phase(3, "Desmontando as partições do cartão…", 25)
-                    await asyncio.to_thread(unmount_device_partitions, self.target_disk)
-                    phase(3, "Apagando o conteúdo anterior do cartão…", 27)
-                    await asyncio.to_thread(wipe_device_signatures, self.target_disk)
-                # Keep the Imager log outside the temp dir so the operator can
-                # send it for diagnosis even after this screen closes.
-                log_path = Path(tempfile.gettempdir()) / "totem-imager.log"
-                console_log_path = Path(tempfile.gettempdir()) / "totem-imager-console.log"
-                command = build_flash_command(
-                    executable, image_uri, self.target_disk, expected_hash, str(script_path),
+            # Revalidate the selected card as close as possible to the write.
+            fresh_disks = await asyncio.to_thread(get_removable_disks)
+            confirmed = next((item for item in fresh_disks if item.device == self.target_disk), None)
+            if confirmed is None or confirmed.size_bytes != disk.size_bytes or confirmed.model != disk.model:
+                raise ImagerError("A unidade selecionada mudou durante a preparação. Nenhum dado foi escrito.")
+            if os.name != "nt":
+                phase(3, "Desmontando as partições do cartão…", 25)
+                await asyncio.to_thread(unmount_device_partitions, self.target_disk)
+                phase(3, "Apagando o conteúdo anterior do cartão…", 27)
+                await asyncio.to_thread(wipe_device_signatures, self.target_disk)
+            # Keep the Imager log outside the temp dir so the operator can
+            # send it for diagnosis even after this screen closes.
+            log_path = Path(tempfile.gettempdir()) / "totem-imager.log"
+            console_log_path = Path(tempfile.gettempdir()) / "totem-imager-console.log"
+            command = build_flash_command(
+                executable, image_uri, self.target_disk, expected_hash, str(script_path),
+                str(log_path),
+            )
+            phase(3, "Gravando a imagem com o Raspberry Pi Imager — não remova o cartão…", 25)
+            phase(3, "Iniciando a gravação…", 28)
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            last_output = ""
+            output_buffer = ""
+            assert process.stdout is not None
+            with console_log_path.open("wb") as console_log:
+                console_log.write(b"Saida capturada do Raspberry Pi Imager:\n")
+                while True:
+                    chunk = await process.stdout.read(1024)
+                    if not chunk:
+                        break
+                    console_log.write(chunk)
+                    console_log.flush()
+                    output_buffer += chunk.decode("utf-8", errors="replace")
+                    lines = output_buffer.replace("\r", "\n").split("\n")
+                    output_buffer = lines.pop()
+                    for line in lines:
+                        last_output = line.strip()
+                        if not last_output:
+                            continue
+                        self.query_one("#flash-detail", Static).update(last_output[-400:])
+                        percent_match = re.search(r"(\d{1,3})\s*%", last_output)
+                        if percent_match:
+                            percent = min(100, int(percent_match.group(1)))
+                            if "verif" in last_output.lower():
+                                self._set_phase(4, last_output[-400:], 70 + int(percent * 0.25))
+                            else:
+                                self._set_phase(3, last_output[-400:], 25 + int(percent * 0.45))
+            if output_buffer.strip():
+                last_output = output_buffer.strip()
+            return_code = await process.wait()
+            if return_code != 0:
+                log_tail = await asyncio.to_thread(wait_imager_log_tail, str(log_path))
+                console_tail = await asyncio.to_thread(read_imager_log_tail, str(console_log_path))
+                detail = await asyncio.to_thread(
+                    describe_flash_failure,
+                    return_code,
+                    console_tail,
+                    last_output,
+                    log_tail,
+                    command,
+                    executable,
+                    str(script_path),
+                    str(console_log_path),
                     str(log_path),
                 )
-                phase(3, "Gravando a imagem com o Raspberry Pi Imager — não remova o cartão…", 25)
-                phase(3, "Iniciando a gravação…", 28)
-                process = await asyncio.create_subprocess_exec(
-                    *command,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-                last_output = ""
-                output_buffer = ""
-                assert process.stdout is not None
-                with console_log_path.open("wb") as console_log:
-                    console_log.write(b"Saida capturada do Raspberry Pi Imager:\n")
-                    while True:
-                        chunk = await process.stdout.read(1024)
-                        if not chunk:
-                            break
-                        console_log.write(chunk)
-                        console_log.flush()
-                        output_buffer += chunk.decode("utf-8", errors="replace")
-                        lines = output_buffer.replace("\r", "\n").split("\n")
-                        output_buffer = lines.pop()
-                        for line in lines:
-                            last_output = line.strip()
-                            if not last_output:
-                                continue
-                            self.query_one("#flash-detail", Static).update(last_output[-400:])
-                            percent_match = re.search(r"(\d{1,3})\s*%", last_output)
-                            if percent_match:
-                                percent = min(100, int(percent_match.group(1)))
-                                if "verif" in last_output.lower():
-                                    self._set_phase(4, last_output[-400:], 70 + int(percent * 0.25))
-                                else:
-                                    self._set_phase(3, last_output[-400:], 25 + int(percent * 0.45))
-                if output_buffer.strip():
-                    last_output = output_buffer.strip()
-                return_code = await process.wait()
-                if return_code != 0:
-                    log_tail = await asyncio.to_thread(wait_imager_log_tail, str(log_path))
-                    console_tail = await asyncio.to_thread(read_imager_log_tail, str(console_log_path))
-                    detail = await asyncio.to_thread(
-                        describe_flash_failure,
-                        return_code,
-                        console_tail,
-                        last_output,
-                        log_tail,
-                        command,
-                        executable,
-                        str(script_path),
-                        str(console_log_path),
-                        str(log_path),
-                    )
-                    raise ImagerError(detail)
+                raise ImagerError(detail)
 
-                if os.name != "nt":
-                    phase(5, "Montando a partição de boot (somente leitura) para conferir o firstrun.sh…", 95)
-                    pass
-                    await asyncio.to_thread(
-                        verify_first_run_script, self.target_disk, self.config.hostname
-                    )
+            if os.name != "nt":
+                phase(5, "Montando a partição de boot (somente leitura) para conferir o firstrun.sh…", 95)
+                pass
+                await asyncio.to_thread(
+                    verify_first_run_script, self.target_disk, self.config.hostname
+                )
 
             self._set_phase(len(self.PHASES) - 1, "", 100)
             self.query_one("#provisioning-log", Static).update(

@@ -195,6 +195,57 @@ class TestEnsureImagerWindows(unittest.TestCase):
             with self.assertRaises(imager.ImagerError):
                 imager._require_first_run_support("C:\\old\\rpi-imager.exe")
 
+    def test_flash_command_includes_debug_flag(self):
+        with patch.object(imager, "is_elevated", return_value=True):
+            command = imager.build_flash_command(
+                "rpi-imager", "https://example.com/img.xz", "dest",
+                None, None, None,
+            )
+        self.assertIn("--debug", command)
+
+    def test_windows_flash_gate_requires_real_elevation(self):
+        args = ("rpi-imager.exe", "https://example.com/img.xz", "dest", None, None, None)
+        with patch("os.name", "nt"), \
+                patch.object(imager, "is_process_elevated", return_value=False):
+            with self.assertRaises(imager.ImagerError):
+                imager.build_flash_command(*args)
+        with patch("os.name", "nt"), \
+                patch.object(imager, "is_process_elevated", return_value=True):
+            command = imager.build_flash_command(*args)
+        self.assertIn("--debug", command)
+
+    def test_strict_elevation_matches_euid_off_windows(self):
+        import os as _os
+        with patch("os.name", "posix"):
+            self.assertEqual(
+                imager.is_process_elevated(),
+                hasattr(_os, "geteuid") and _os.geteuid() == 0,
+            )
+
+    def test_strict_elevation_reads_token_on_windows(self):
+        from unittest.mock import MagicMock as _MagicMock
+        fake_windll = _MagicMock()
+        fake_windll.kernel32.GetCurrentProcess.return_value = 1234
+        fake_windll.advapi32.OpenProcessToken.return_value = True
+
+        def _elevated(token, cls, buf, size, ret):
+            buf._obj.value = 1
+            return True
+
+        def _filtered(token, cls, buf, size, ret):
+            buf._obj.value = 0
+            return True
+
+        with patch("os.name", "nt"), \
+                patch.object(imager.ctypes, "windll", fake_windll, create=True):
+            fake_windll.advapi32.GetTokenInformation.side_effect = _elevated
+            self.assertTrue(imager.is_process_elevated())
+            fake_windll.advapi32.GetTokenInformation.side_effect = _filtered
+            self.assertFalse(imager.is_process_elevated())
+            fake_windll.advapi32.OpenProcessToken.return_value = False
+            fake_windll.shell32.IsUserAnAdmin.return_value = True
+            self.assertTrue(imager.is_process_elevated())
+
     def test_not_elevated_aborts_before_any_install_attempt(self):
         active = []
         self._patch_platform(active)
@@ -245,6 +296,31 @@ class TestFlashFailureDetail(unittest.TestCase):
         )
         self.assertIn("some console line", detail)
         self.assertIn("some log line", detail)
+
+    def test_detail_reports_uac_elevation_state(self):
+        kwargs = dict(
+            return_code=1,
+            console_tail="",
+            last_output="",
+            log_tail="",
+            command=[FAKE_EXE, "--cli"],
+            executable=FAKE_EXE,
+            first_run_script=None,
+            console_log_path="C:\\Temp\\totem-imager-console.log",
+            log_path="C:\\Temp\\totem-imager.log",
+        )
+        with patch("os.name", "nt"), \
+                patch.object(imager, "is_process_elevated", return_value=False):
+            self.assertIn(
+                "Processo elevado (UAC): não", imager.describe_flash_failure(**kwargs)
+            )
+        with patch("os.name", "nt"), \
+                patch.object(imager, "is_process_elevated", return_value=True):
+            self.assertIn(
+                "Processo elevado (UAC): sim", imager.describe_flash_failure(**kwargs)
+            )
+        with patch("os.name", "posix"):
+            self.assertNotIn("Processo elevado", imager.describe_flash_failure(**kwargs))
 
     def test_missing_script_is_flagged(self):
         with patch("pathlib.Path.is_file", return_value=False):

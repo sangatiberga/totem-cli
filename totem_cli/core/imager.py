@@ -172,6 +172,34 @@ def is_elevated() -> bool:
     return hasattr(os, "geteuid") and os.geteuid() == 0
 
 
+def is_process_elevated() -> bool:
+    """True only when the process token is actually elevated (UAC-aware).
+
+    IsUserAnAdmin reports membership in Administrators, which stays true for
+    a filtered (non-elevated) UAC token. Raw disk access needs real elevation,
+    so query TokenElevation instead, falling back to IsUserAnAdmin only when
+    the token cannot be inspected.
+    """
+    if os.name != "nt":
+        return hasattr(os, "geteuid") and os.geteuid() == 0
+    try:
+        token = ctypes.c_void_p()
+        proc = ctypes.windll.kernel32.GetCurrentProcess()
+        if not ctypes.windll.advapi32.OpenProcessToken(proc, 0x0008, ctypes.byref(token)):
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        elevation = ctypes.c_ulong(0)
+        size = ctypes.c_ulong(ctypes.sizeof(elevation))
+        ok = ctypes.windll.advapi32.GetTokenInformation(
+            token, 20, ctypes.byref(elevation), ctypes.sizeof(elevation), ctypes.byref(size)
+        )
+        ctypes.windll.kernel32.CloseHandle(token)
+        if not ok:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        return bool(elevation.value)
+    except Exception:
+        return False
+
+
 def find_all_imagers() -> list[str]:
     """Every rpi-imager candidate on this machine, in lookup order."""
     found: list[str] = []
@@ -597,9 +625,12 @@ def build_flash_command(executable: str, image_uri: str, target_device: str,
                         expected_sha256: Optional[str] = None,
                         first_run_script: Optional[str] = None,
                         log_file: Optional[str] = None) -> list[str]:
-    if os.name == "nt" and not is_elevated():
-        raise ImagerError("A gravação no Windows exige abrir o terminal como Administrador.")
-    args = [executable, "--cli"]
+    if os.name == "nt" and not is_process_elevated():
+        raise ImagerError(
+            "A gravação no Windows exige terminal com elevação real de Administrador "
+            "(UAC): pertencer ao grupo Administradores sem elevar não basta."
+        )
+    args = [executable, "--cli", "--debug"]
     if platform.system().lower() == "linux" and not is_elevated():
         args = ["sudo", "-n", *args]
     if expected_sha256:
@@ -677,6 +708,10 @@ def describe_flash_failure(return_code: int, console_tail: str, last_output: str
             "script de primeiro boot abaixo."
         )
     details.append(f"Executável: {executable}")
+    if os.name == "nt":
+        details.append(
+            f"Processo elevado (UAC): {'sim' if is_process_elevated() else 'não'}"
+        )
     details.append("Comando executado:\n" + " ".join(command))
     if first_run_script:
         if Path(first_run_script).is_file():
