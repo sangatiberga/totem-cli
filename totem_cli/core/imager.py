@@ -651,3 +651,39 @@ def wait_imager_log_tail(log_file: str, timeout_s: float = 6.0, max_chars: int =
         last_size = size
         time.sleep(0.4)
     return tail
+
+
+def describe_flash_failure(return_code: int, console_tail: str, last_output: str,
+                           log_tail: str, command: list[str], executable: str,
+                           first_run_script: Optional[str],
+                           console_log_path: str, log_path: str) -> str:
+    """Build the flash error detail shown when rpi-imager exits non-zero.
+
+    On Windows the Imager often exits with an empty captured stdout and an
+    empty --log-file, leaving only "code 1" behind. The exact command line,
+    the executable, and the first-run script state are always included so a
+    silent exit stays diagnosable.
+    """
+    details = [f"Raspberry Pi Imager encerrou com código {return_code}."]
+    if console_tail:
+        details.append(f"Saída do processo:\n{console_tail}")
+    elif last_output:
+        details.append(f"Última saída: {last_output}")
+    if log_tail:
+        details.append(f"Log do Imager:\n{log_tail}")
+    if not console_tail and not last_output and not log_tail:
+        details.append(
+            "O Imager não registrou saída ou log: verifique o comando e o "
+            "script de primeiro boot abaixo."
+        )
+    details.append(f"Executável: {executable}")
+    details.append("Comando executado:\n" + " ".join(command))
+    if first_run_script:
+        if Path(first_run_script).is_file():
+            details.append(f"Script de primeiro boot: {first_run_script} (presente)")
+        else:
+            details.append(
+                f"Script de primeiro boot: {first_run_script} (não encontrado)"
+            )
+    details.extend((f"Saída completa em: {console_log_path}", f"Log completo em: {log_path}"))
+    return "\n\n".join(details)

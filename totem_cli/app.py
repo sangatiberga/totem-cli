@@ -28,6 +28,7 @@ from totem_cli.core.imager import (
     build_flash_command,
     ensure_imager,
     is_elevated,
+    describe_flash_failure,
     read_imager_log_tail,
     wait_imager_log_tail,
     resolve_bookworm_image,
@@ -902,15 +903,18 @@ class ProgressFlashScreen(BaseScreen):
                 if return_code != 0:
                     log_tail = await asyncio.to_thread(wait_imager_log_tail, str(log_path))
                     console_tail = await asyncio.to_thread(read_imager_log_tail, str(console_log_path))
-                    details = [f"Raspberry Pi Imager encerrou com código {return_code}."]
-                    if console_tail:
-                        details.append(f"Saída do processo:\n{console_tail}")
-                    elif last_output:
-                        details.append(f"Última saída: {last_output}")
-                    if log_tail:
-                        details.append(f"Log do Imager:\n{log_tail}")
-                    details.extend((f"Saída completa em: {console_log_path}", f"Log completo em: {log_path}"))
-                    detail = "\n\n".join(details)
+                    detail = await asyncio.to_thread(
+                        describe_flash_failure,
+                        return_code,
+                        console_tail,
+                        last_output,
+                        log_tail,
+                        command,
+                        executable,
+                        str(script_path),
+                        str(console_log_path),
+                        str(log_path),
+                    )
                     raise ImagerError(detail)
 
                 if os.name != "nt":

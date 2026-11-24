@@ -208,5 +208,60 @@ class TestEnsureImagerWindows(unittest.TestCase):
             mock_urlopen.assert_not_called()
 
 
+class TestFlashFailureDetail(unittest.TestCase):
+    def test_empty_outputs_still_identify_command_and_script(self):
+        detail = imager.describe_flash_failure(
+            return_code=1,
+            console_tail="",
+            last_output="",
+            log_tail="",
+            command=[FAKE_EXE, "--cli", "--first-run-script", "C:\\Temp\\totem-first-run.sh",
+                     "--log-file", "C:\\Temp\\totem-imager.log",
+                     "https://example.com/image.img.xz", "\\\\.\\PhysicalDrive1"],
+            executable=FAKE_EXE,
+            first_run_script="C:\\Temp\\totem-first-run.sh",
+            console_log_path="C:\\Temp\\totem-imager-console.log",
+            log_path="C:\\Temp\\totem-imager.log",
+        )
+        self.assertIn("código 1", detail)
+        self.assertIn(FAKE_EXE, detail)
+        self.assertIn("--first-run-script", detail)
+        self.assertIn("C:\\Temp\\totem-first-run.sh", detail)
+        self.assertIn("\\\\.\\PhysicalDrive1", detail)
+        self.assertIn("C:\\Temp\\totem-imager-console.log", detail)
+        self.assertIn("C:\\Temp\\totem-imager.log", detail)
+
+    def test_tails_are_included_when_present(self):
+        detail = imager.describe_flash_failure(
+            return_code=1,
+            console_tail="some console line",
+            last_output="",
+            log_tail="some log line",
+            command=[FAKE_EXE, "--cli"],
+            executable=FAKE_EXE,
+            first_run_script=None,
+            console_log_path="C:\\Temp\\totem-imager-console.log",
+            log_path="C:\\Temp\\totem-imager.log",
+        )
+        self.assertIn("some console line", detail)
+        self.assertIn("some log line", detail)
+
+    def test_missing_script_is_flagged(self):
+        with patch("pathlib.Path.is_file", return_value=False):
+            detail = imager.describe_flash_failure(
+                return_code=1,
+                console_tail="",
+                last_output="",
+                log_tail="",
+                command=[FAKE_EXE, "--cli"],
+                executable=FAKE_EXE,
+                first_run_script="C:\\Temp\\missing.sh",
+                console_log_path="C:\\Temp\\totem-imager-console.log",
+                log_path="C:\\Temp\\totem-imager.log",
+            )
+        self.assertIn("C:\\Temp\\missing.sh", detail)
+        self.assertIn("não encontrado", detail)
+
+
 if __name__ == "__main__":
     unittest.main()
