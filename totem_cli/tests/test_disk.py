@@ -1,7 +1,13 @@
 """Unit tests for disk detection and safety filtering."""
+import json
 import unittest
 from unittest.mock import MagicMock, patch
-from totem_cli.core.disk import is_system_mountpoint, get_removable_disks_linux, get_removable_disks_windows
+from totem_cli.core.disk import (
+    canonicalize_windows_device,
+    is_system_mountpoint,
+    get_removable_disks_linux,
+    get_removable_disks_windows,
+)
 
 
 class TestDiskSafety(unittest.TestCase):
@@ -82,6 +88,42 @@ class TestDiskSafety(unittest.TestCase):
         self.assertEqual(len(disks), 1)
         self.assertEqual(disks[0].device, "/dev/sdc")
         self.assertEqual(disks[0].mountpoints, ["/media/user/BOOT"])
+
+
+
+class TestWindowsDeviceCanonicalization(unittest.TestCase):
+    BS = chr(92)
+
+    def test_all_caps_wmi_spelling_is_rewritten(self):
+        wmi = self.BS * 2 + "." + self.BS + "PHYSICALDRIVE1"
+        self.assertEqual(
+            canonicalize_windows_device(wmi),
+            self.BS * 2 + "." + self.BS + "PhysicalDrive1",
+        )
+
+    def test_already_canonical_and_other_values_pass_through(self):
+        canon = self.BS * 2 + "." + self.BS + "PhysicalDrive2"
+        self.assertEqual(canonicalize_windows_device(canon), canon)
+        self.assertEqual(canonicalize_windows_device("/dev/sda"), "/dev/sda")
+        self.assertEqual(canonicalize_windows_device(""), "")
+        self.assertIsNone(canonicalize_windows_device(None))
+        bare = self.BS * 2 + "." + self.BS + "PhysicalDrive"
+        self.assertEqual(canonicalize_windows_device(bare), bare)
+
+    @patch("subprocess.run")
+    def test_windows_listing_normalizes_device_id(self, mock_run):
+        wmi = self.BS * 2 + "." + self.BS + "PHYSICALDRIVE1"
+        payload = [{"DeviceID": wmi, "Index": 1, "Model": "SD Reader",
+                    "Size": 32000000000}]
+        first = MagicMock()
+        first.stdout = json.dumps(payload)
+        second = MagicMock()
+        second.stdout = ""
+        mock_run.side_effect = [first, second]
+        disks = get_removable_disks_windows()
+        self.assertEqual(len(disks), 1)
+        self.assertEqual(disks[0].device,
+                         self.BS * 2 + "." + self.BS + "PhysicalDrive1")
 
 
 def import_json_dumps(data):

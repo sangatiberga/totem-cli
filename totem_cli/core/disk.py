@@ -114,6 +114,27 @@ def get_removable_disks_linux() -> List[DiskDrive]:
     return drives
 
 
+def canonicalize_windows_device(device_id: str) -> str:
+    """Normalize a Win32_DiskDrive DeviceID to the Imager's own spelling.
+
+    WMI reports the device as all caps (e.g. PhysicalDrive1 in upper case)
+    while ``rpi-imager --cli`` enumerates the mixed-case form and compares
+    the destination with a case-sensitive ``==``. Passing the WMI spelling
+    makes the Imager refuse the drive with exit code 1 and no message, so
+    rewrite the known pattern to the canonical mixed-case form. Anything
+    else passes through untouched.
+    """
+    if not device_id:
+        return device_id
+    prefix = "\\\\.\\physicaldrive"
+    if not device_id.lower().startswith(prefix):
+        return device_id
+    number = device_id[len(prefix):]
+    if not number.isdigit():
+        return device_id
+    return "\\\\" + ".\\" + "PhysicalDrive" + number
+
+
 def get_removable_disks_windows() -> List[DiskDrive]:
     """Discover removable USB/SD drives on Windows using PowerShell."""
     ps_cmd = (
@@ -138,7 +159,7 @@ def get_removable_disks_windows() -> List[DiskDrive]:
 
     drives: List[DiskDrive] = []
     for item in data:
-        device_id = item.get("DeviceID", "")
+        device_id = canonicalize_windows_device(item.get("DeviceID", ""))
         size_bytes = int(item.get("Size") or 0)
         size_gb = size_bytes / (1024**3)
         model = (item.get("Model") or "").strip()
