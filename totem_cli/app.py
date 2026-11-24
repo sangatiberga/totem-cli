@@ -858,6 +858,7 @@ class ProgressFlashScreen(BaseScreen):
                 # Keep the Imager log outside the temp dir so the operator can
                 # send it for diagnosis even after this screen closes.
                 log_path = Path(tempfile.gettempdir()) / "totem-imager.log"
+                console_log_path = Path(tempfile.gettempdir()) / "totem-imager-console.log"
                 command = build_flash_command(
                     executable, image_uri, self.target_disk, expected_hash, str(script_path),
                     str(log_path),
@@ -872,31 +873,44 @@ class ProgressFlashScreen(BaseScreen):
                 last_output = ""
                 output_buffer = ""
                 assert process.stdout is not None
-                while True:
-                    chunk = await process.stdout.read(1024)
-                    if not chunk:
-                        break
-                    output_buffer += chunk.decode("utf-8", errors="replace")
-                    lines = output_buffer.replace("\r", "\n").split("\n")
-                    output_buffer = lines.pop()
-                    for line in lines:
-                        last_output = line.strip()
-                        if not last_output:
-                            continue
-                        self.query_one("#flash-detail", Static).update(last_output[-400:])
-                        percent_match = re.search(r"(\d{1,3})\s*%", last_output)
-                        if percent_match:
-                            percent = min(100, int(percent_match.group(1)))
-                            if "verif" in last_output.lower():
-                                self._set_phase(4, last_output[-400:], 70 + int(percent * 0.25))
-                            else:
-                                self._set_phase(3, last_output[-400:], 25 + int(percent * 0.45))
+                with console_log_path.open("wb") as console_log:
+                    console_log.write(b"Saida capturada do Raspberry Pi Imager:\n")
+                    while True:
+                        chunk = await process.stdout.read(1024)
+                        if not chunk:
+                            break
+                        console_log.write(chunk)
+                        console_log.flush()
+                        output_buffer += chunk.decode("utf-8", errors="replace")
+                        lines = output_buffer.replace("\r", "\n").split("\n")
+                        output_buffer = lines.pop()
+                        for line in lines:
+                            last_output = line.strip()
+                            if not last_output:
+                                continue
+                            self.query_one("#flash-detail", Static).update(last_output[-400:])
+                            percent_match = re.search(r"(\d{1,3})\s*%", last_output)
+                            if percent_match:
+                                percent = min(100, int(percent_match.group(1)))
+                                if "verif" in last_output.lower():
+                                    self._set_phase(4, last_output[-400:], 70 + int(percent * 0.25))
+                                else:
+                                    self._set_phase(3, last_output[-400:], 25 + int(percent * 0.45))
                 if output_buffer.strip():
                     last_output = output_buffer.strip()
                 return_code = await process.wait()
                 if return_code != 0:
                     log_tail = await asyncio.to_thread(wait_imager_log_tail, str(log_path))
-                    detail = (log_tail or last_output or f"Raspberry Pi Imager encerrou com código {return_code}.") + f"\nLog completo em: {log_path}"
+                    console_tail = await asyncio.to_thread(read_imager_log_tail, str(console_log_path))
+                    details = [f"Raspberry Pi Imager encerrou com código {return_code}."]
+                    if console_tail:
+                        details.append(f"Saída do processo:\n{console_tail}")
+                    elif last_output:
+                        details.append(f"Última saída: {last_output}")
+                    if log_tail:
+                        details.append(f"Log do Imager:\n{log_tail}")
+                    details.extend((f"Saída completa em: {console_log_path}", f"Log completo em: {log_path}"))
+                    detail = "\n\n".join(details)
                     raise ImagerError(detail)
 
                 if os.name != "nt":
