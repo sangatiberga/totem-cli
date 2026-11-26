@@ -1,7 +1,7 @@
-"""Unit tests for flash-screen repaint throttling."""
+"""Unit tests for flash-screen repaint throttling and SSH host input."""
 import unittest
 
-from totem_cli.app import FLASH_UI_REFRESH_INTERVAL, flash_ui_refresh_due
+from totem_cli.app import FLASH_UI_REFRESH_INTERVAL, SshScreen, flash_ui_refresh_due
 
 
 class TestFlashUiRefreshDue(unittest.TestCase):
@@ -28,6 +28,25 @@ class TestFlashUiRefreshDue(unittest.TestCase):
         self.assertTrue(flash_ui_refresh_due(100.01, 100.0, 0, -1, False, False))
         self.assertFalse(flash_ui_refresh_due(100.01, 100.0, 100, 100, False, False))
         self.assertFalse(flash_ui_refresh_due(100.01, 100.0, 50, 49, False, False))
+
+
+class TestSshHostSanitize(unittest.TestCase):
+    def test_plain_ip_preserved(self):
+        self.assertEqual(SshScreen._sanitize_ssh_host("192.168.1.1"), "192.168.1.1")
+
+    def test_trailing_dot_preserved(self):
+        self.assertEqual(SshScreen._sanitize_ssh_host("192."), "192.")
+
+    def test_digits_only_not_truncated(self):
+        self.assertEqual(SshScreen._sanitize_ssh_host("192168"), "192168")
+
+    def test_strips_invalid_and_truncates_octets(self):
+        self.assertEqual(SshScreen._sanitize_ssh_host("192a168"), "192168")
+        self.assertEqual(SshScreen._sanitize_ssh_host("192.168.1111"), "192.168.111")
+
+    def test_collapses_double_dots_and_keeps_short_octets(self):
+        self.assertEqual(SshScreen._sanitize_ssh_host("1.2.3.4"), "1.2.3.4")
+        self.assertEqual(SshScreen._sanitize_ssh_host("192..168"), "192.168")
 
 
 if __name__ == "__main__":

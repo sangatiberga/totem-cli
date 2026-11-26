@@ -260,6 +260,10 @@ class TestSshRemoteEditing(unittest.TestCase):
         self.client.change_password("nova-senha-123")
         self.assertTrue(any("chpasswd" in c for c in self.commands))
 
+    def test_change_password_updates_credential(self):
+        self.client.change_password("nova-senha-456")
+        self.assertEqual(self.client.password, "nova-senha-456")
+
     def test_read_logs_rejects_unknown_source(self):
         with self.assertRaises(SshClientError):
             self.client.read_logs("/etc/shadow")
@@ -268,6 +272,43 @@ class TestSshRemoteEditing(unittest.TestCase):
         text = self.client.read_logs("firstboot", lines=10)
         self.assertTrue(any("totem-firstboot.log" in c for c in self.commands))
         self.assertIsInstance(text, str)
+
+    def test_remove_known_host_key(self):
+        import paramiko
+        import tempfile
+        from pathlib import Path
+        from totem_cli.core.ssh import remove_known_host_key, _fingerprint
+        host = "192.168.1.99"
+        key = paramiko.RSAKey.generate(2048)
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "known_hosts"
+            hk = paramiko.HostKeys()
+            hk.add(host, key.get_name(), key)
+            hk.save(str(path))
+            self.assertTrue(remove_known_host_key(host, path))
+            hk2 = paramiko.HostKeys()
+            hk2.load(str(path))
+            self.assertIsNone(hk2.lookup(host))
+            self.assertFalse(remove_known_host_key(host, path))
+
+    def test_bad_host_key_raises_changed(self):
+        import paramiko
+        from unittest.mock import patch as _patch
+        from totem_cli.core.ssh import HostKeyChangedError, _fingerprint
+        from paramiko.ssh_exception import BadHostKeyException
+        host = "192.168.1.100"
+        new_key = paramiko.RSAKey.generate(2048)
+        old_key = paramiko.RSAKey.generate(2048)
+        exc = BadHostKeyException(host, new_key, old_key)
+        client = TotemSshClient(host=host, user="usinagem", password="secret")
+        with _patch("totem_cli.core.ssh.paramiko.SSHClient") as MockClient:
+            mock = MockClient.return_value
+            mock.connect.side_effect = exc
+            with self.assertRaises(HostKeyChangedError) as ctx:
+                client.connect()
+            self.assertEqual(ctx.exception.host, host)
+            self.assertEqual(ctx.exception.fingerprint, _fingerprint(new_key))
+            self.assertEqual(ctx.exception.expected_fingerprint, _fingerprint(old_key))
 
     def test_upload_rejects_disallowed_target(self):
         with self.assertRaises(SshClientError):

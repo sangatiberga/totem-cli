@@ -44,10 +44,12 @@ from totem_cli.core.imager import (
 )
 from totem_cli.core.injector import TotemConfig, build_first_run_script, validate_config
 from totem_cli.core.ssh import (
+    HostKeyChangedError,
     RemoteTotemState,
     SshClientError,
     TotemSshClient,
     UnknownHostKeyError,
+    remove_known_host_key,
     VALID_ROTATIONS,
     WifiLinkDroppedError,
     validate_hostname,
@@ -301,6 +303,51 @@ class TrustHostKeyModal(ModalScreen[bool]):
         self.dismiss(event.button.id == "trust-host")
 
 
+class HostKeyChangedModal(ModalScreen[bool]):
+    CSS = """
+    HostKeyChangedModal { align: center middle; background: rgba(0, 0, 0, 0.78); }
+    #dialog { width: 78; height: auto; padding: 1 3; border: heavy #ff3347; background: #141414; }
+    #modal-title { color: #ff3347; text-style: bold; text-align: center; margin-bottom: 1; }
+    #host-fingerprint { color: #ffffff; margin: 1 0; }
+    #modal-actions { height: 3; align: center middle; }
+    """
+
+    def __init__(
+        self,
+        host: str,
+        key_type: str,
+        fingerprint: str,
+        expected_fingerprint: Optional[str] = None,
+    ) -> None:
+        super().__init__()
+        self.host = host
+        self.key_type = key_type
+        self.fingerprint = fingerprint
+        self.expected_fingerprint = expected_fingerprint
+
+    def compose(self) -> ComposeResult:
+        extra = ""
+        if self.expected_fingerprint:
+            extra = f"\n\nAntes salva: {self.expected_fingerprint}"
+        with Vertical(id="dialog"):
+            yield Static("CHAVE SSH MUDOU", id="modal-title")
+            yield Static(
+                f"A chave do host [b]{self.host}[/] não confere mais com a salva.\n\n"
+                "Isso é esperado após um novo firstboot (o Raspberry Pi gera novas chaves SSH). "
+                "Atualizar remove a chave antiga e salva a nova — equivalente ao comando "
+                f"`ssh-keygen -R {self.host}`.\n\n"
+                "Só atualize se você fez um novo firstboot neste dispositivo.",
+                id="modal-msg",
+            )
+            yield Static(f"{self.key_type}\n{self.fingerprint}{extra}", id="host-fingerprint")
+            with Horizontal(id="modal-actions"):
+                yield Button("ATUALIZAR E CONFIAR", id="update-host", variant="primary")
+                yield Button("CANCELAR", id="cancel-host")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "update-host")
+
+
 class ApplyConfirmModal(ModalScreen[bool]):
     CSS = """
     ApplyConfirmModal { align: center middle; background: rgba(0, 0, 0, 0.78); }
@@ -332,22 +379,63 @@ class ApplyConfirmModal(ModalScreen[bool]):
 
 class SshScreen(BaseScreen):
     def on_input_changed(self, event: Input.Changed) -> None:
+        """Sanitize the IP field without auto-inserting dots.
+
+        The old digits-only formatter grouped every 3 digits and appended a
+        trailing '.', which then trapped Backspace (deleting the dot just
+        re-inserted it). The new behavior keeps what the user typed,
+        only stripping invalid characters and capping each octet at 3
+        digits, so Backspace/Delete always behave as typed.
+        """
         if event.input.id != "ssh-host" or getattr(self, "_formatting_ssh_host", False):
             return
 
         raw_value = event.value
-        digits = "".join(char for char in raw_value if char.isdigit())[:12]
-        formatted = ".".join(digits[index:index + 3] for index in range(0, len(digits), 3))
-        if digits and len(digits) < 12 and len(digits) % 3 == 0:
-            formatted += "."
-        if formatted != raw_value:
-            digits_before_cursor = sum(char.isdigit() for char in raw_value[:event.input.cursor_position])
-            separators_before_cursor = min(digits_before_cursor // 3, 3)
-            cursor = digits_before_cursor + separators_before_cursor
+        cursor = event.input.cursor_position
+        cleaned = self._sanitize_ssh_host(raw_value)
+        if cleaned != raw_value:
+            # Map the cursor to the nearest equivalent position in the
+            # cleaned string by counting surviving characters.
+            kept_before = self._kept_prefix_length(raw_value[:cursor], raw_value, cleaned)
             self._formatting_ssh_host = True
-            event.input.value = formatted
-            event.input.cursor_position = min(cursor, len(formatted))
+            event.input.value = cleaned
+            event.input.cursor_position = min(kept_before, len(cleaned))
             self._formatting_ssh_host = False
+
+    @staticmethod
+    def _sanitize_ssh_host(value: str) -> str:
+        """Keep only digits and dots, capped at 4 octets of up to 3 digits."""
+        # No dot typed yet: keep digits as typed (up to 12) so Backspace
+        # always deletes the last digit without re-inserting separators.
+        if "." not in value:
+            return "".join(ch for ch in value if ch.isdigit())[:12]
+        parts = value.split(".")
+        out: list[str] = []
+        for part in parts[:4]:
+            digits = "".join(ch for ch in part if ch.isdigit())[:3]
+            out.append(digits)
+        # Preserve a trailing dot if the user typed it (e.g. "192.")
+        if value.endswith(".") and len(out) < 4:
+            joined = ".".join(out)
+            if not joined.endswith("."):
+                joined += "."
+            return joined[:15]
+        joined = ".".join(out)
+        while ".." in joined:
+            joined = joined.replace("..", ".")
+        return joined[:15]
+
+    @staticmethod
+    def _kept_prefix_length(prefix: str, raw: str, cleaned: str) -> int:
+        """Map a cursor over the raw string to the cleaned string."""
+        # Count how many kept characters fall before the cursor.
+        # Rebuild the cleaned prefix the same way sanitize does for the prefix.
+        if cursor_is_end := (len(prefix) == len(raw)):
+            return len(cleaned)
+        kept = SshScreen._sanitize_ssh_host(prefix)
+        # If the prefix ended with a dot that was kept, the cursor sits
+        # after it in cleaned as well.
+        return min(len(kept), len(cleaned))
 
     def on_mount(self) -> None:
         self.set_steps(["Conectar", "Inspecionar", "Editar"], 0)
@@ -1238,6 +1326,14 @@ class TotemApp(App[None]):
             ssh_screen = self.screen_stack[-2]
             ssh_screen.query_one("#ssh-host", Input).value = ""
             ssh_screen.query_one("#ssh-user", Input).value = ""
+            # Ensure the connect button does not stay in loading state when
+            # the inventory screen is popped.
+            try:
+                btn = ssh_screen.query_one("#ssh-connect", Button)
+                btn.loading = False
+                btn.disabled = False
+            except Exception:
+                pass
             self.pop_screen()
         elif wid in {"cancel", "review"}:
             self.pop_screen()
@@ -1328,6 +1424,7 @@ class TotemApp(App[None]):
     async def _connect_ssh(self, host: str, user: str, password: str,
                            key_file: str, expected_fingerprint: Optional[str] = None) -> None:
         client = None
+        origin = self.screen
         try:
             client = TotemSshClient(
                 host=host.strip(),
@@ -1350,15 +1447,41 @@ class TotemApp(App[None]):
                         exclusive=True,
                     )
             self.push_screen(TrustHostKeyModal(host.strip(), key_type, fingerprint), on_trust_result)
+        except HostKeyChangedError as exc:
+            fingerprint = exc.fingerprint
+            key_type = exc.key_type
+            expected = exc.expected_fingerprint
+            def on_changed_result(confirmed: bool) -> None:
+                if confirmed:
+                    remove_known_host_key(host.strip())
+                    self.run_worker(
+                        self._connect_ssh(host, user, password, key_file, fingerprint),
+                        exclusive=True,
+                    )
+            self.push_screen(
+                HostKeyChangedModal(host.strip(), key_type, fingerprint, expected),
+                on_changed_result,
+            )
         except Exception as exc:
             self.notify(f"Falha SSH: {exc}. Nenhum inventário foi apresentado.", title="Conexão falhou", severity="error")
         finally:
             if client:
                 await asyncio.to_thread(client.close)
-            try:
-                self.screen.query_one("#ssh-connect", Button).loading = False
-            except Exception:
-                pass
+            for target in (origin, self.screen):
+                try:
+                    btn = target.query_one("#ssh-connect", Button)
+                    btn.loading = False
+                    btn.disabled = False
+                except Exception:
+                    pass
+            # Fallback for stacks where the origin reference was lost
+            for scr in list(self.screen_stack):
+                try:
+                    btn = scr.query_one("#ssh-connect", Button)
+                    btn.loading = False
+                    btn.disabled = False
+                except Exception:
+                    pass
 
     def _ssh_client_for_screen(self, screen) -> TotemSshClient:
         return TotemSshClient(
@@ -1460,7 +1583,15 @@ class TotemApp(App[None]):
         if kind == "timezone":
             return client.set_timezone(payload)
         if kind == "password":
-            return client.change_password(payload)
+            result = client.change_password(payload)
+            # Keep the screen credential in sync so the next SSH action
+            # (inspect, reboot, refresh) still authenticates.
+            try:
+                self.screen.password = payload
+                self.screen.query_one("#new-password", Input).value = ""
+            except Exception:
+                pass
+            return result
         if kind == "nexus_url":
             return client.update_nexus_url(payload)
         if kind == "rotation":
