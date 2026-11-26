@@ -263,6 +263,88 @@ class TestEnsureImagerWindows(unittest.TestCase):
 
 
 
+
+class TestCheckMediaCanWrite(unittest.TestCase):
+    SIZE = 4096
+
+    def _windll(self, write_ok=True, read_ok=True, mutate=False, open_ok=True):
+        from unittest.mock import MagicMock as _MagicMock
+        from ctypes import c_void_p as _cvp, cast, POINTER, c_ulong
+        fake = _MagicMock()
+        fake.kernel32.CreateFileW.return_value = 1234 if open_ok else _cvp(-1).value
+        fake.kernel32.SetFilePointerEx.return_value = 1
+        state = {"stored": None, "mutate": mutate}
+
+        def _write(h, buf, n, written_ptr, ov):
+            cast(written_ptr, POINTER(c_ulong)).contents.value = n if write_ok else 0
+            if write_ok:
+                state["stored"] = bytes(buf[0:n])
+            return 1 if write_ok else 0
+
+        def _read(h, buf, n, readc_ptr, ov):
+            cast(readc_ptr, POINTER(c_ulong)).contents.value = n if read_ok else 0
+            if read_ok and state["stored"] is not None:
+                data = bytearray(state["stored"][:n])
+                if state["mutate"]:
+                    data[0] = 0
+                    state["mutate"] = False
+                buf[0:n] = bytes(data)
+            return 1 if read_ok else 0
+
+        fake.kernel32.WriteFile.side_effect = _write
+        fake.kernel32.ReadFile.side_effect = _read
+        return fake
+
+    def test_successful_write_and_readback_proceeds(self):
+        fake = self._windll()
+        with patch("os.name", "nt"), \
+                patch.object(imager.ctypes, "windll", fake, create=True):
+            imager.check_media_can_write("X:", self.SIZE)
+        fake.kernel32.CloseHandle.assert_called_once_with(1234)
+
+
+    def test_write_refusal_is_reported(self):
+        fake = self._windll(write_ok=False)
+        with patch("os.name", "nt"), \
+                patch.object(imager.ctypes, "windll", fake, create=True):
+            with self.assertRaises(imager.ImagerError) as ctx:
+                imager.check_media_can_write("X:", self.SIZE)
+        self.assertIn("recusou a escrita", str(ctx.exception))
+
+    def test_unreadable_media_is_reported(self):
+        fake = self._windll(read_ok=False)
+        with patch("os.name", "nt"), \
+                patch.object(imager.ctypes, "windll", fake, create=True):
+            with self.assertRaises(imager.ImagerError) as ctx:
+                imager.check_media_can_write("X:", self.SIZE)
+        self.assertIn("ler o cartão de volta", str(ctx.exception))
+
+    def test_corrupted_readback_is_reported(self):
+        fake = self._windll(mutate=True)
+        with patch("os.name", "nt"), \
+                patch.object(imager.ctypes, "windll", fake, create=True):
+            with self.assertRaises(imager.ImagerError) as ctx:
+                imager.check_media_can_write("X:", self.SIZE)
+        self.assertIn("não voltaram íntegros", str(ctx.exception))
+
+    def test_unopened_device_lets_flash_proceed(self):
+        fake = self._windll(open_ok=False)
+        with patch("os.name", "nt"), \
+                patch.object(imager.ctypes, "windll", fake, create=True):
+            imager.check_media_can_write("X:", self.SIZE)
+
+    def test_probe_failure_lets_flash_proceed(self):
+        fake = self._windll()
+        fake.kernel32.WriteFile.side_effect = OSError("boom")
+        with patch("os.name", "nt"), \
+                patch.object(imager.ctypes, "windll", fake, create=True):
+            imager.check_media_can_write("X:", self.SIZE)
+
+    def test_noop_off_windows(self):
+        with patch("os.name", "posix"):
+            imager.check_media_can_write("/dev/sda", self.SIZE)
+
+
 class TestCheckDeviceWritable(unittest.TestCase):
     INVALID = __import__("ctypes").c_void_p(-1).value
 

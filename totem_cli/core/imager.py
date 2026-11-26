@@ -172,6 +172,81 @@ def is_elevated() -> bool:
     return hasattr(os, "geteuid") and os.geteuid() == 0
 
 
+MEDIA_PROBE_SIZE = 1024 * 1024
+
+
+def check_media_can_write(device: str, size_bytes: int = MEDIA_PROBE_SIZE) -> None:
+    """Write a real block to the media and read it back before flashing.
+
+    Opening the device only proves the handle works; the Imager's error-5
+    failures happen later, on real writes. This probe writes
+    ``size_bytes`` of a known pattern at offset 0, reads it back, and
+    compares. Any failure is reported in plain language: the card or
+    adapter refused the write, or the written bytes did not survive.
+    Windows only; any unexpected probe error aborts in favor of letting
+    the Imager run.
+    """
+    if os.name != "nt" or not device:
+        return
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateFileW.restype = ctypes.c_void_p
+        handle = kernel32.CreateFileW(
+            device,
+            0x80000000 | 0x40000000,
+            0,
+            None,
+            3,
+            0,
+            None,
+        )
+        if handle == ctypes.c_void_p(-1).value:
+            return
+        write_error: Optional[str] = None
+        read_error: Optional[str] = None
+        corrupt_error: Optional[str] = None
+        try:
+            pattern = bytes((i % 251) + 1 for i in range(size_bytes))
+            buffer = ctypes.create_string_buffer(pattern, size_bytes)
+            written = ctypes.c_ulong(0)
+            ok_write = kernel32.WriteFile(
+                handle, buffer, size_bytes, ctypes.byref(written), None
+            )
+            if not ok_write or written.value != size_bytes:
+                write_error = (
+                    "O cartão recusou a escrita durante o teste (acesso "
+                    "negado). Verifique a trava física Lock do adaptador SD, "
+                    "a flag somente-leitura (diskpart > attributes disk) e, se "
+                    "persistir, o próprio cartão."
+                )
+            else:
+                kernel32.SetFilePointerEx(handle, ctypes.c_longlong(0), None, 0)
+                readback = ctypes.create_string_buffer(size_bytes)
+                read_count = ctypes.c_ulong(0)
+                ok_read = kernel32.ReadFile(
+                    handle, readback, size_bytes, ctypes.byref(read_count), None
+                )
+                if not ok_read or read_count.value != size_bytes:
+                    read_error = (
+                        "Não foi possível ler o cartão de volta durante o "
+                        "teste. O cartão ou o leitor pode estar com defeito."
+                    )
+                elif readback.raw != pattern:
+                    corrupt_error = (
+                        "Os dados gravados no cartão não voltaram íntegros. "
+                        "O cartão ou o leitor está com defeito."
+                    )
+        finally:
+            kernel32.CloseHandle(handle)
+        for message in (write_error, read_error, corrupt_error):
+            if message is not None:
+                raise ImagerError(message)
+    except ImagerError:
+        raise
+    except Exception:
+        return
+
+
 def check_device_writable(device: str) -> None:
     """Fail fast when the card refuses writes, before invoking the Imager.
 

@@ -30,6 +30,7 @@ from totem_cli.core.imager import (
     authorize_sudo,
     build_flash_command,
     check_device_writable,
+    check_media_can_write,
     imager_log_paths,
     ensure_imager,
     is_elevated,
@@ -895,6 +896,8 @@ class ProgressFlashScreen(BaseScreen):
                 raise ImagerError("A unidade selecionada mudou durante a preparação. Nenhum dado foi escrito.")
             phase(3, "Conferindo se o cartão aceita escrita…", 24)
             await asyncio.to_thread(check_device_writable, self.target_disk)
+            phase(3, "Testando a mídia com escrita real de 1 MB…", 24)
+            await asyncio.to_thread(check_media_can_write, self.target_disk)
             if os.name != "nt":
                 phase(3, "Desmontando as partições do cartão…", 25)
                 await asyncio.to_thread(unmount_device_partitions, self.target_disk)
