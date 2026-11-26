@@ -40,6 +40,15 @@ done
 
 hostnamectl set-hostname "$HOSTNAME_VAL"
 localectl set-locale LANG=pt_BR.UTF-8 2>/dev/null || sed -i 's/^LANG=.*/LANG=pt_BR.UTF-8/' /etc/default/locale 2>/dev/null || true
+# Teclado fisicamente brasileiro ABNT2: sem isto o console fica em "us"
+# e Shift+2 sai como aspas duplas em vez de @.
+localectl set-x11-keymap br br-abnt2 2>/dev/null || true
+if [ -x /usr/bin/raspi-config ]; then
+    raspi-config nonint do_set_keyboard_layout br br-abnt2 2>/dev/null || true
+fi
+if command -v dpkg-reconfigure >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive dpkg-reconfigure console-setup 2>/dev/null || true
+fi
 timedatectl set-timezone "$TIMEZONE" 2>/dev/null || true
 if grep -qE '^127\.0\.1\.1[[:space:]]' /etc/hosts; then
     sed -i "s/^127\.0\.1\.1[[:space:]].*/127.0.1.1\t${HOSTNAME_VAL}/" /etc/hosts

@@ -1396,7 +1396,7 @@ class TotemApp(App[None]):
         screen = self.screen
         staged = sorted(screen.pending, key=lambda item: screen.STAGE_ORDER.index(item["kind"]))
         screen.pending = []
-        screen._render_pending()
+        screen._refresh_pending()
         client = self._ssh_client_for_screen(screen)
         lines: list[str] = []
 
